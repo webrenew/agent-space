@@ -46,5 +46,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('terminal:claude-status', handler)
       return () => { ipcRenderer.removeListener('terminal:claude-status', handler) }
     }
+  },
+  settings: {
+    get: () => ipcRenderer.invoke('settings:get'),
+
+    set: (settings: unknown) => ipcRenderer.invoke('settings:set', settings),
+
+    selectDirectory: () => ipcRenderer.invoke('settings:selectDirectory'),
+
+    onOpenSettings: (callback: () => void) => {
+      const handler = () => callback()
+      ipcRenderer.on('menu:openSettings', handler)
+      return () => { ipcRenderer.removeListener('menu:openSettings', handler) }
+    }
   }
 })

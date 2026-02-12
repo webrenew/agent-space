@@ -1,11 +1,23 @@
+import { useEffect } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Office } from './scene/Office'
 import { HUD } from './hud/HUD'
 import { TerminalPanel } from './components/TerminalPanel'
+import { SettingsPanel } from './components/SettingsPanel'
 import { useAgentStore } from './store/agents'
+import { useSettingsStore, loadSettings } from './store/settings'
 
 export function App() {
   const selectAgent = useAgentStore((s) => s.selectAgent)
+  const openSettings = useSettingsStore((s) => s.openSettings)
+
+  useEffect(() => {
+    loadSettings()
+    const unsub = window.electronAPI.settings.onOpenSettings(() => {
+      openSettings()
+    })
+    return unsub
+  }, [openSettings])
 
   return (
     <div className="flex flex-col w-full h-full">
@@ -28,6 +40,9 @@ export function App() {
 
       {/* Terminal panel at bottom */}
       <TerminalPanel />
+
+      {/* Settings modal */}
+      <SettingsPanel />
     </div>
   )
 }

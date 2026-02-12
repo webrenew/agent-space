@@ -1,5 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron'
 import os from 'os'
+import { getSettings, isValidShell, isValidDirectory } from './settings'
 
 // node-pty is a native module — require at runtime to avoid bundling issues
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -37,13 +38,23 @@ function getDefaultShell(): string {
 export function setupTerminalHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('terminal:create', (_event, options?: { cols?: number; rows?: number }) => {
     const id = `term-${++idCounter}`
-    const shell = getDefaultShell()
+    const settings = getSettings()
+
+    const customShell = settings.general.customShell
+    const shell = settings.general.shell === 'custom' && customShell && isValidShell(customShell)
+      ? customShell
+      : getDefaultShell()
+
+    const customDir = settings.general.customDirectory
+    const cwd = settings.general.startingDirectory === 'custom' && customDir && isValidDirectory(customDir)
+      ? customDir
+      : os.homedir()
 
     const ptyProcess = pty.spawn(shell, [], {
       name: 'xterm-256color',
       cols: options?.cols ?? 80,
       rows: options?.rows ?? 24,
-      cwd: os.homedir(),
+      cwd,
       env: { ...process.env, TERM: 'xterm-256color' }
     })
 

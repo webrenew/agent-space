@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import path from 'path'
 import { setupTerminalHandlers, cleanupTerminals } from './terminal'
+import { setupSettingsHandlers, createApplicationMenu } from './settings'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -24,6 +25,8 @@ function createWindow(): void {
   })
 
   setupTerminalHandlers(mainWindow)
+  setupSettingsHandlers()
+  createApplicationMenu(mainWindow)
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])

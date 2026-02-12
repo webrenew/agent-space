@@ -13,6 +13,52 @@ export type CelebrationType = 'confetti'
 
 export type HairStyle = 'short' | 'long' | 'ponytail' | 'buzz' | 'mohawk'
 
+export type CursorStyle = 'block' | 'underline' | 'bar'
+
+export interface AppSettings {
+  general: {
+    startingDirectory: 'home' | 'custom'
+    customDirectory: string
+    shell: 'default' | 'custom'
+    customShell: string
+  }
+  appearance: {
+    fontFamily: string
+    fontSize: number
+    cursorStyle: CursorStyle
+    cursorBlink: boolean
+  }
+  terminal: {
+    scrollbackLines: number
+    copyOnSelect: boolean
+    optionAsMeta: boolean
+    visualBell: boolean
+    audibleBell: boolean
+  }
+}
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  general: {
+    startingDirectory: 'home',
+    customDirectory: '',
+    shell: 'default',
+    customShell: ''
+  },
+  appearance: {
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    fontSize: 13,
+    cursorStyle: 'bar',
+    cursorBlink: true
+  },
+  terminal: {
+    scrollbackLines: 5000,
+    copyOnSelect: false,
+    optionAsMeta: false,
+    visualBell: false,
+    audibleBell: false
+  }
+}
+
 export interface AgentAppearance {
   shirtColor: string
   hairColor: string
@@ -96,6 +142,12 @@ declare global {
         onData: (callback: (id: string, data: string) => void) => () => void
         onExit: (callback: (id: string, exitCode: number, signal?: number) => void) => () => void
         onClaudeStatus: (callback: (id: string, isRunning: boolean) => void) => () => void
+      }
+      settings: {
+        get: () => Promise<AppSettings>
+        set: (settings: AppSettings) => Promise<void>
+        selectDirectory: () => Promise<string | null>
+        onOpenSettings: (callback: () => void) => () => void
       }
     }
   }

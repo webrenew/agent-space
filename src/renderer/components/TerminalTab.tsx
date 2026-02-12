@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { ClaudeDetector } from '../services/claudeDetector'
 import { useAgentStore } from '../store/agents'
+import { useSettingsStore } from '../store/settings'
 import type { Agent } from '../types'
 import { randomAppearance } from '../types'
 
@@ -56,15 +57,18 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
     const container = containerRef.current
     if (!container) return
 
+    const { appearance, terminal: termSettings } = useSettingsStore.getState().settings
+
     const term = new Terminal({
       theme: THEME,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 13,
+      fontFamily: appearance.fontFamily,
+      fontSize: appearance.fontSize,
       lineHeight: 1.2,
-      cursorBlink: true,
-      cursorStyle: 'bar',
+      cursorBlink: appearance.cursorBlink,
+      cursorStyle: appearance.cursorStyle,
       allowTransparency: true,
-      scrollback: 5000
+      scrollback: termSettings.scrollbackLines,
+      macOptionIsMeta: termSettings.optionAsMeta
     })
 
     const fitAddon = new FitAddon()
