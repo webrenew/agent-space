@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  --color-background: #0a0a0a;
+  --color-foreground: #ededed;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Typewriter cursor blink */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.typewriter-cursor::after {
+  content: "▊";
+  animation: blink 0.8s step-end infinite;
+  color: #4ECDC4;
+}
+
+/* Virtual joystick base */
+.joystick-zone {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

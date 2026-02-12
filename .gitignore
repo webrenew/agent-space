@@ -1,6 +1,7 @@
 node_modules/
 out/
 dist/
+release/
 *.tsbuildinfo
 
 # Environment & secrets
@@ -17,3 +18,15 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Claude Code
+.claude/
+
+# Build artifacts
+build/
+
+# User docs
+.user/
+
+# Next.js
+web/.next/

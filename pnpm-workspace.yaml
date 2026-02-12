@@ -1,1 +1,3 @@
+packages:
+  - "web"
 onlyBuiltDependencies: electron esbuild
