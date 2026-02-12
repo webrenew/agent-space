@@ -138,7 +138,7 @@ export function setupTerminalHandlers(mainWindow: BrowserWindow): void {
 
     sessions.set(id, session)
 
-    return { id }
+    return { id, cwd }
   })
 
   ipcMain.on('terminal:write', (_event, id: string, data: string) => {

@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   terminal: {
     create: (options?: { cols?: number; rows?: number }) =>
-      ipcRenderer.invoke('terminal:create', options) as Promise<{ id: string }>,
+      ipcRenderer.invoke('terminal:create', options) as Promise<{ id: string; cwd: string }>,
 
     write: (id: string, data: string) =>
       ipcRenderer.send('terminal:write', id, data),

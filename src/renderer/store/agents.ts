@@ -5,6 +5,8 @@ export interface TerminalInfo {
   id: string
   label: string
   isClaudeRunning: boolean
+  scopeId: string | null
+  cwd: string | null
 }
 
 interface AgentStore {

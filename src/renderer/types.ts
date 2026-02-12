@@ -16,6 +16,50 @@ export type AgentEventType =
   | 'tool_call' | 'commit' | 'push'
   | 'test_pass' | 'test_fail' | 'build_pass' | 'build_fail' | 'error'
 
+export type TerminalThemeName =
+  | 'agent-space'
+  | 'dracula'
+  | 'solarized-dark'
+  | 'solarized-light'
+  | 'nord'
+  | 'monokai'
+  | 'gruvbox-dark'
+  | 'tokyo-night'
+
+export type SoundEventType =
+  | 'commit'
+  | 'push'
+  | 'test_pass'
+  | 'test_fail'
+  | 'build_pass'
+  | 'build_fail'
+  | 'agent_done'
+  | 'error'
+
+export type SystemSound =
+  | 'Basso' | 'Blow' | 'Bottle' | 'Frog' | 'Funk'
+  | 'Glass' | 'Hero' | 'Morse' | 'Ping' | 'Pop'
+  | 'Purr' | 'Sosumi' | 'Submarine' | 'Tink'
+
+export interface Scope {
+  id: string
+  name: string
+  color: string
+  directories: string[]
+  soundEvents: Partial<Record<SoundEventType, SystemSound | 'none'>>
+}
+
+export const DEFAULT_SOUND_EVENTS: Record<SoundEventType, SystemSound> = {
+  commit: 'Pop',
+  push: 'Hero',
+  test_pass: 'Glass',
+  test_fail: 'Basso',
+  build_pass: 'Ping',
+  build_fail: 'Sosumi',
+  agent_done: 'Blow',
+  error: 'Funk',
+}
+
 export interface AgentEvent {
   id: string
   timestamp: number
@@ -67,6 +111,7 @@ export interface AppSettings {
     fontSize: number
     cursorStyle: CursorStyle
     cursorBlink: boolean
+    terminalTheme: TerminalThemeName
   }
   terminal: {
     scrollbackLines: number
@@ -76,6 +121,17 @@ export interface AppSettings {
     audibleBell: boolean
   }
   subscription: SubscriptionConfig
+  scopes: Scope[]
+  defaultScope: Scope
+  soundsEnabled: boolean
+}
+
+export const DEFAULT_SCOPE: Scope = {
+  id: 'default',
+  name: 'Default',
+  color: '#6b7280',
+  directories: [],
+  soundEvents: {},
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -89,7 +145,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     fontSize: 13,
     cursorStyle: 'bar',
-    cursorBlink: true
+    cursorBlink: true,
+    terminalTheme: 'agent-space',
   },
   terminal: {
     scrollbackLines: 5000,
@@ -101,7 +158,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   subscription: {
     type: 'api',
     monthlyCost: 0
-  }
+  },
+  scopes: [],
+  defaultScope: DEFAULT_SCOPE,
+  soundsEnabled: true,
 }
 
 export interface AgentAppearance {
@@ -181,7 +241,7 @@ declare global {
         electron: string
       }
       terminal: {
-        create: (options?: { cols?: number; rows?: number }) => Promise<{ id: string }>
+        create: (options?: { cols?: number; rows?: number }) => Promise<{ id: string; cwd: string }>
         write: (id: string, data: string) => void
         resize: (id: string, cols: number, rows: number) => void
         kill: (id: string) => Promise<void>

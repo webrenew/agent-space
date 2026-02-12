@@ -15,6 +15,7 @@ interface AppSettings {
     fontSize: number
     cursorStyle: 'block' | 'underline' | 'bar'
     cursorBlink: boolean
+    terminalTheme: string
   }
   terminal: {
     scrollbackLines: number
@@ -23,6 +24,15 @@ interface AppSettings {
     visualBell: boolean
     audibleBell: boolean
   }
+  scopes: unknown[]
+  defaultScope: {
+    id: string
+    name: string
+    color: string
+    directories: string[]
+    soundEvents: Record<string, string>
+  }
+  soundsEnabled: boolean
 }
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -36,7 +46,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     fontFamily: 'Menlo, Monaco, "Courier New", monospace',
     fontSize: 13,
     cursorStyle: 'bar',
-    cursorBlink: true
+    cursorBlink: true,
+    terminalTheme: 'agent-space',
   },
   terminal: {
     scrollbackLines: 5000,
@@ -44,7 +55,16 @@ const DEFAULT_SETTINGS: AppSettings = {
     optionAsMeta: false,
     visualBell: false,
     audibleBell: false
-  }
+  },
+  scopes: [],
+  defaultScope: {
+    id: 'default',
+    name: 'Default',
+    color: '#6b7280',
+    directories: [],
+    soundEvents: {},
+  },
+  soundsEnabled: true,
 }
 
 const SETTINGS_DIR = path.join(os.homedir(), '.agent-space')

@@ -5,36 +5,20 @@ import '@xterm/xterm/css/xterm.css'
 import { ClaudeDetector } from '../services/claudeDetector'
 import { useAgentStore } from '../store/agents'
 import { useSettingsStore } from '../store/settings'
-import type { Agent } from '../types'
+import type { Agent, Scope } from '../types'
 import { randomAppearance } from '../types'
+import { getTheme } from '../lib/terminalThemes'
+import { playSoundForEvent } from '../lib/soundPlayer'
 
 interface TerminalTabProps {
   terminalId: string
   isActive: boolean
 }
 
-const THEME = {
-  background: '#16162a',
-  foreground: '#e2e8f0',
-  cursor: '#4ade80',
-  cursorAccent: '#16162a',
-  selectionBackground: '#334155',
-  black: '#1e1e2e',
-  red: '#f87171',
-  green: '#4ade80',
-  yellow: '#fbbf24',
-  blue: '#60a5fa',
-  magenta: '#c084fc',
-  cyan: '#22d3ee',
-  white: '#e2e8f0',
-  brightBlack: '#475569',
-  brightRed: '#fca5a5',
-  brightGreen: '#86efac',
-  brightYellow: '#fde68a',
-  brightBlue: '#93c5fd',
-  brightMagenta: '#d8b4fe',
-  brightCyan: '#67e8f9',
-  brightWhite: '#f8fafc'
+function getTerminalScope(terminalId: string): Scope {
+  const terminal = useAgentStore.getState().terminals.find(t => t.id === terminalId)
+  const { scopes, defaultScope } = useSettingsStore.getState().settings
+  return scopes.find(s => s.id === terminal?.scopeId) ?? defaultScope
 }
 
 let agentIdCounter = 0
@@ -64,6 +48,17 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
     })
   }
 
+  // Live theme switching
+  useEffect(() => {
+    const unsub = useSettingsStore.subscribe((state) => {
+      const themeName = state.settings.appearance.terminalTheme
+      if (terminalRef.current) {
+        terminalRef.current.options.theme = getTheme(themeName)
+      }
+    })
+    return unsub
+  }, [])
+
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -71,7 +66,7 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
     const { appearance, terminal: termSettings } = useSettingsStore.getState().settings
 
     const term = new Terminal({
-      theme: THEME,
+      theme: getTheme(appearance.terminalTheme),
       fontFamily: appearance.fontFamily,
       fontSize: appearance.fontSize,
       lineHeight: 1.2,
@@ -113,6 +108,8 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
           const agentUpdates: Record<string, unknown> = {}
           const agentId = currentAgent.id
           const evtBase = { agentId, agentName: currentAgent.name }
+          const scope = getTerminalScope(terminalId)
+          const soundsEnabled = useSettingsStore.getState().settings.soundsEnabled
 
           // Status change
           if (update.status) {
@@ -162,7 +159,7 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
             }
           }
 
-          // Git commit detected → confetti
+          // Git commit detected → confetti + sound
           if (update.commitDetected) {
             const newCount = currentAgent.commitCount + 1
             agentUpdates.commitCount = newCount
@@ -171,18 +168,20 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
             addToast({ message: `${currentAgent.name} committed!`, type: 'success' })
             addEvent({ ...evtBase, type: 'commit', description: 'Committed changes' })
             setTimeout(() => clearCelebration(agentId), 4000)
+            playSoundForEvent('commit', scope, soundsEnabled)
           }
 
-          // Git push → rocket
+          // Git push → rocket + sound
           if (update.pushDetected) {
             agentUpdates.activeCelebration = 'rocket' as const
             agentUpdates.celebrationStartedAt = Date.now()
             addToast({ message: `${currentAgent.name} pushed!`, type: 'success' })
             addEvent({ ...evtBase, type: 'push', description: 'Pushed to remote' })
             setTimeout(() => clearCelebration(agentId), 3000)
+            playSoundForEvent('push', scope, soundsEnabled)
           }
 
-          // Test/build fail → explosion
+          // Test/build fail → explosion + sound
           if (update.testFailed || update.buildFailed) {
             agentUpdates.activeCelebration = 'explosion' as const
             agentUpdates.celebrationStartedAt = Date.now()
@@ -190,28 +189,33 @@ export function TerminalTab({ terminalId, isActive }: TerminalTabProps) {
             addToast({ message: `${currentAgent.name} ${msg}!`, type: 'error' })
             addEvent({ ...evtBase, type: update.testFailed ? 'test_fail' : 'build_fail', description: msg.charAt(0).toUpperCase() + msg.slice(1) })
             setTimeout(() => clearCelebration(agentId), 2000)
+            playSoundForEvent(update.testFailed ? 'test_fail' : 'build_fail', scope, soundsEnabled)
           }
 
-          // Test/build pass → toast only
+          // Test/build pass → toast + sound
           if (update.testPassed) {
             addToast({ message: `${currentAgent.name} tests passed!`, type: 'success' })
             addEvent({ ...evtBase, type: 'test_pass', description: 'Tests passed' })
+            playSoundForEvent('test_pass', scope, soundsEnabled)
           }
           if (update.buildSucceeded) {
             addToast({ message: `${currentAgent.name} build succeeded!`, type: 'success' })
             addEvent({ ...evtBase, type: 'build_pass', description: 'Build succeeded' })
+            playSoundForEvent('build_pass', scope, soundsEnabled)
           }
 
-          // Agent done → trophy
+          // Agent done → trophy + sound
           if (update.status === 'done' && currentAgent.status !== 'done') {
             agentUpdates.activeCelebration = 'trophy' as const
             agentUpdates.celebrationStartedAt = Date.now()
             setTimeout(() => clearCelebration(agentId), 3000)
+            playSoundForEvent('agent_done', scope, soundsEnabled)
           }
 
-          // Error event
+          // Error event + sound
           if (update.status === 'error' && currentAgent.status !== 'error') {
             addEvent({ ...evtBase, type: 'error', description: update.currentTask || 'Error detected' })
+            playSoundForEvent('error', scope, soundsEnabled)
           }
 
           updateAgent(agentId, agentUpdates)

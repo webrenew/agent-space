@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSettingsStore, saveSettings } from '../store/settings'
-import type { AppSettings, CursorStyle, SubscriptionType } from '../types'
-import { DEFAULT_SETTINGS, SUBSCRIPTION_OPTIONS } from '../types'
+import type { AppSettings, CursorStyle, SubscriptionType, Scope, SoundEventType, SystemSound, TerminalThemeName } from '../types'
+import { DEFAULT_SETTINGS, DEFAULT_SOUND_EVENTS, DEFAULT_SCOPE, SUBSCRIPTION_OPTIONS } from '../types'
+import { THEME_NAMES, THEME_LABELS, getTheme } from '../lib/terminalThemes'
+import { SYSTEM_SOUND_NAMES, playSystemSound } from '../lib/soundPlayer'
 
-type Tab = 'general' | 'appearance' | 'terminal' | 'subscription'
+type Tab = 'general' | 'appearance' | 'terminal' | 'scopes' | 'subscription'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'appearance', label: 'Appearance' },
   { id: 'terminal', label: 'Terminal' },
+  { id: 'scopes', label: 'Scopes' },
   { id: 'subscription', label: 'Plan' }
 ]
 
@@ -36,6 +39,22 @@ const CURSOR_STYLES: { value: CursorStyle; label: string }[] = [
   { value: 'block', label: 'Block' },
   { value: 'underline', label: 'Underline' },
   { value: 'bar', label: 'Bar' }
+]
+
+const SOUND_EVENT_LABELS: Record<SoundEventType, string> = {
+  commit: 'Git Commit',
+  push: 'Git Push',
+  test_pass: 'Tests Passed',
+  test_fail: 'Tests Failed',
+  build_pass: 'Build Passed',
+  build_fail: 'Build Failed',
+  agent_done: 'Agent Done',
+  error: 'Error',
+}
+
+const SCOPE_COLOR_PRESETS = [
+  '#4ade80', '#60a5fa', '#a78bfa', '#f87171', '#fbbf24',
+  '#22d3ee', '#e879f9', '#fb923c', '#34d399', '#f472b6',
 ]
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -171,6 +190,74 @@ export function SettingsPanel() {
     []
   )
 
+  const updateScopes = useCallback(
+    (scopes: Scope[]) => {
+      setDraft((d) => ({ ...d, scopes }))
+    },
+    []
+  )
+
+  const addScope = useCallback(() => {
+    const id = `scope-${Date.now()}`
+    const newScope: Scope = {
+      id,
+      name: 'New Scope',
+      color: SCOPE_COLOR_PRESETS[draft.scopes.length % SCOPE_COLOR_PRESETS.length],
+      directories: [],
+      soundEvents: {},
+    }
+    setDraft((d) => ({ ...d, scopes: [...d.scopes, newScope] }))
+  }, [draft.scopes.length])
+
+  const removeScope = useCallback((scopeId: string) => {
+    setDraft((d) => ({ ...d, scopes: d.scopes.filter((s) => s.id !== scopeId) }))
+  }, [])
+
+  const updateScope = useCallback((scopeId: string, updates: Partial<Scope>) => {
+    setDraft((d) => ({
+      ...d,
+      scopes: d.scopes.map((s) => (s.id === scopeId ? { ...s, ...updates } : s)),
+    }))
+  }, [])
+
+  const addDirectoryToScope = useCallback(async (scopeId: string) => {
+    const dir = await window.electronAPI.settings.selectDirectory()
+    if (!dir) return
+    setDraft((d) => ({
+      ...d,
+      scopes: d.scopes.map((s) =>
+        s.id === scopeId ? { ...s, directories: [...s.directories, dir] } : s
+      ),
+    }))
+  }, [])
+
+  const removeDirectoryFromScope = useCallback((scopeId: string, dirIndex: number) => {
+    setDraft((d) => ({
+      ...d,
+      scopes: d.scopes.map((s) =>
+        s.id === scopeId
+          ? { ...s, directories: s.directories.filter((_, i) => i !== dirIndex) }
+          : s
+      ),
+    }))
+  }, [])
+
+  const updateScopeSoundEvent = useCallback((scopeId: string, event: SoundEventType, value: SystemSound | 'none' | '') => {
+    setDraft((d) => ({
+      ...d,
+      scopes: d.scopes.map((s) => {
+        if (s.id !== scopeId) return s
+        const soundEvents = { ...s.soundEvents }
+        if (value === '') {
+          delete soundEvents[event]
+        } else {
+          soundEvents[event] = value
+        }
+        return { ...s, soundEvents }
+      }),
+    }))
+  }, [])
+
   const handleBrowse = useCallback(async () => {
     const dir = await window.electronAPI.settings.selectDirectory()
     if (dir) updateGeneral({ customDirectory: dir })
@@ -283,6 +370,24 @@ export function SettingsPanel() {
 
           {activeTab === 'appearance' && (
             <>
+              <Section title="Theme">
+                <Row label="Terminal theme">
+                  <Select
+                    value={draft.appearance.terminalTheme}
+                    options={THEME_NAMES as unknown as string[]}
+                    labels={THEME_LABELS as unknown as Record<string, string>}
+                    onChange={(v) => updateAppearance({ terminalTheme: v as TerminalThemeName })}
+                  />
+                </Row>
+                <div className="flex gap-1.5 py-2">
+                  {(() => {
+                    const t = getTheme(draft.appearance.terminalTheme)
+                    return [t.background, t.foreground, t.red, t.green, t.blue, t.yellow, t.magenta, t.cyan].map((c, i) => (
+                      <span key={i} className="w-5 h-5 rounded" style={{ backgroundColor: c as string }} />
+                    ))
+                  })()}
+                </div>
+              </Section>
               <Section title="Font">
                 <Row label="Font family">
                   <Select
@@ -369,6 +474,146 @@ export function SettingsPanel() {
                     checked={draft.terminal.audibleBell}
                     onChange={(v) => updateTerminal({ audibleBell: v })}
                   />
+                </Row>
+              </Section>
+            </>
+          )}
+
+          {activeTab === 'scopes' && (
+            <>
+              <Section title="Notification Sounds">
+                <Row label="Enable sounds">
+                  <Toggle
+                    checked={draft.soundsEnabled}
+                    onChange={(v) => setDraft((d) => ({ ...d, soundsEnabled: v }))}
+                  />
+                </Row>
+              </Section>
+
+              <Section title="Scopes">
+                {draft.scopes.length === 0 && (
+                  <div className="text-xs text-white/40 py-3">
+                    No scopes configured. Add a scope to group terminals by project.
+                  </div>
+                )}
+                {draft.scopes.map((scope) => (
+                  <div key={scope.id} className="py-3 border-b border-white/5 last:border-0">
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        type="text"
+                        value={scope.name}
+                        onChange={(e) => updateScope(scope.id, { name: e.target.value })}
+                        className="bg-white/10 border border-white/15 rounded-md px-2 py-1 text-sm text-white outline-none focus:border-green-400/50 flex-1"
+                      />
+                      <input
+                        type="text"
+                        value={scope.color}
+                        onChange={(e) => updateScope(scope.id, { color: e.target.value })}
+                        className="bg-white/10 border border-white/15 rounded-md px-2 py-1 text-sm text-white outline-none focus:border-green-400/50 w-20 font-mono"
+                        placeholder="#hex"
+                      />
+                      <span className="w-5 h-5 rounded" style={{ backgroundColor: scope.color }} />
+                      <button
+                        onClick={() => removeScope(scope.id)}
+                        className="text-gray-500 hover:text-red-400 text-xs px-1.5 py-0.5 rounded hover:bg-red-400/10 transition-colors"
+                      >
+                        Remove
+                      </button>
+                    </div>
+
+                    {/* Color presets */}
+                    <div className="flex gap-1 mb-2">
+                      {SCOPE_COLOR_PRESETS.map((color) => (
+                        <button
+                          key={color}
+                          onClick={() => updateScope(scope.id, { color })}
+                          className={`w-4 h-4 rounded-full border transition-all ${
+                            scope.color === color ? 'border-white scale-125' : 'border-transparent hover:scale-110'
+                          }`}
+                          style={{ backgroundColor: color }}
+                        />
+                      ))}
+                    </div>
+
+                    {/* Directories */}
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1 mt-3">
+                      Directories
+                    </div>
+                    {scope.directories.length === 0 && (
+                      <div className="text-xs text-white/30 mb-1">No directories</div>
+                    )}
+                    {scope.directories.map((dir, i) => (
+                      <div key={i} className="flex items-center gap-1.5 mb-1">
+                        <span className="text-xs text-gray-400 font-mono truncate flex-1">{dir}</span>
+                        <button
+                          onClick={() => removeDirectoryFromScope(scope.id, i)}
+                          className="text-gray-500 hover:text-red-400 text-xs transition-colors"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => addDirectoryToScope(scope.id)}
+                      className="text-xs text-green-400 hover:text-green-300 transition-colors mt-1"
+                    >
+                      + Add directory
+                    </button>
+
+                    {/* Per-scope sounds */}
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 mb-1 mt-3">
+                      Sound Overrides
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                      {(Object.keys(SOUND_EVENT_LABELS) as SoundEventType[]).map((evt) => (
+                        <div key={evt} className="flex items-center gap-1.5">
+                          <span className="text-xs text-gray-400 flex-1">{SOUND_EVENT_LABELS[evt]}</span>
+                          <select
+                            value={scope.soundEvents[evt] ?? ''}
+                            onChange={(e) => updateScopeSoundEvent(scope.id, evt, e.target.value as SystemSound | 'none' | '')}
+                            className="bg-white/10 border border-white/15 rounded px-1 py-0.5 text-[11px] text-white outline-none w-20"
+                          >
+                            <option value="" className="bg-[#1a1a2e]">Default</option>
+                            <option value="none" className="bg-[#1a1a2e]">None</option>
+                            {SYSTEM_SOUND_NAMES.map((s) => (
+                              <option key={s} value={s} className="bg-[#1a1a2e]">{s}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => {
+                              const sound = scope.soundEvents[evt] || DEFAULT_SOUND_EVENTS[evt]
+                              if (sound && sound !== 'none') playSystemSound(sound as SystemSound)
+                            }}
+                            className="text-gray-500 hover:text-white text-xs transition-colors"
+                            title="Preview"
+                          >
+                            ▶
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  onClick={addScope}
+                  className="mt-2 px-3 py-1.5 text-xs font-medium bg-white/10 hover:bg-white/15 border border-white/15 rounded-md text-gray-300 transition-colors"
+                >
+                  + Add Scope
+                </button>
+              </Section>
+
+              <Section title="Default Scope">
+                <Row label="Color for unmatched terminals">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={draft.defaultScope.color}
+                      onChange={(e) => setDraft((d) => ({ ...d, defaultScope: { ...d.defaultScope, color: e.target.value } }))}
+                      className="bg-white/10 border border-white/15 rounded-md px-2 py-1 text-sm text-white outline-none focus:border-green-400/50 w-20 font-mono"
+                    />
+                    <span className="w-5 h-5 rounded" style={{ backgroundColor: draft.defaultScope.color }} />
+                  </div>
                 </Row>
               </Section>
             </>
