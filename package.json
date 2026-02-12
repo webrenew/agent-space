@@ -1,0 +1,46 @@
+{
+  "name": "agent-space",
+  "version": "1.0.0",
+  "description": "Agent Office — 3D observability for AI agents",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "postinstall": "electron-rebuild -f -w node-pty"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.12.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty"
+    ]
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.0.0",
+    "@react-three/fiber": "^9.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.0.0",
+    "three": "^0.175.0",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.175.0",
+    "electron": "^40.4.0",
+    "electron-vite": "^3.1.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.9.3"
+  }
+}
