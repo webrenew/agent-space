@@ -2,7 +2,7 @@
 
 import { Suspense } from "react";
 import { Canvas } from "@react-three/fiber";
-import { Preload } from "@react-three/drei";
+import { OrbitControls, Preload } from "@react-three/drei";
 import { Office } from "./Office";
 
 function LoadingScreen() {
@@ -34,6 +34,18 @@ export function Scene() {
           }}
         >
           <Office />
+          <OrbitControls
+            autoRotate
+            autoRotateSpeed={0.3}
+            enableDamping
+            dampingFactor={0.05}
+            target={[0, 1, -6]}
+            minPolarAngle={Math.PI / 6}
+            maxPolarAngle={Math.PI / 2.5}
+            minDistance={8}
+            maxDistance={18}
+            enablePan={false}
+          />
           <Preload all />
         </Canvas>
       </Suspense>

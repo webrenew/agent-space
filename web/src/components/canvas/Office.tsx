@@ -2,12 +2,23 @@
 
 import { useDemoStore } from "@/stores/useDemoStore";
 import { AgentCharacter } from "./AgentCharacter";
+import { CelebrationEffect } from "./CelebrationEffect";
+import type { AgentStatus } from "@/types";
 
 const WALL_COLOR = "#E8E0D8";
 const FLOOR_COLOR = "#D4A574";
 const DESK_COLOR = "#8B6914";
 const MONITOR_COLOR = "#1A1A2E";
-const MONITOR_SCREEN = "#22C55E";
+
+const SCREEN_COLORS: Record<AgentStatus, { color: string; emissive: string; intensity: number }> = {
+  idle: { color: "#1a1a2e", emissive: "#334155", intensity: 0.1 },
+  thinking: { color: "#facc15", emissive: "#facc15", intensity: 0.4 },
+  streaming: { color: "#22C55E", emissive: "#22C55E", intensity: 0.5 },
+  tool_calling: { color: "#a78bfa", emissive: "#a78bfa", intensity: 0.4 },
+  waiting: { color: "#fb923c", emissive: "#fb923c", intensity: 0.3 },
+  error: { color: "#ef4444", emissive: "#ef4444", intensity: 0.6 },
+  done: { color: "#22d3ee", emissive: "#22d3ee", intensity: 0.3 },
+};
 
 /** Desk positions/rotations for up to 4 agents in a 2x2 layout */
 const DESK_LAYOUT: Array<{
@@ -24,10 +35,14 @@ const DESK_LAYOUT: Array<{
 function Desk({
   position,
   rotation = [0, 0, 0],
+  screen,
 }: {
   position: [number, number, number];
   rotation?: [number, number, number];
+  screen?: { color: string; emissive: string; intensity: number };
 }) {
+  const sc = screen ?? { color: "#22C55E", emissive: "#22C55E", intensity: 0.3 };
+
   return (
     <group position={position} rotation={rotation}>
       {/* Desktop surface */}
@@ -52,13 +67,13 @@ function Desk({
         <boxGeometry args={[0.8, 0.5, 0.05]} />
         <meshStandardMaterial color={MONITOR_COLOR} />
       </mesh>
-      {/* Monitor screen */}
+      {/* Monitor screen — status-aware */}
       <mesh position={[0, 1.2, -0.17]}>
         <boxGeometry args={[0.7, 0.4, 0.01]} />
         <meshStandardMaterial
-          color={MONITOR_SCREEN}
-          emissive={MONITOR_SCREEN}
-          emissiveIntensity={0.3}
+          color={sc.color}
+          emissive={sc.emissive}
+          emissiveIntensity={sc.intensity}
         />
       </mesh>
       {/* Monitor stand */}
@@ -325,18 +340,29 @@ export function Office() {
         </mesh>
       ))}
 
-      {/* Agent desks + characters */}
+      {/* Agent desks + characters + celebrations */}
       {agents.map((agent) => {
         const layout = DESK_LAYOUT[agent.deskIndex];
         if (!layout) return null;
         return (
           <group key={agent.id}>
-            <Desk position={layout.position} rotation={layout.rotation} />
+            <Desk
+              position={layout.position}
+              rotation={layout.rotation}
+              screen={SCREEN_COLORS[agent.status]}
+            />
             <AgentCharacter
               agent={agent}
               position={layout.facing}
               rotation={layout.rotation}
             />
+            {agent.activeCelebration && agent.celebrationStartedAt && (
+              <CelebrationEffect
+                type={agent.activeCelebration}
+                startedAt={agent.celebrationStartedAt}
+                position={layout.position}
+              />
+            )}
           </group>
         );
       })}

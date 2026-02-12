@@ -4,6 +4,7 @@ import { simulateStep } from "@/lib/simulation";
 import type { Agent } from "@/types";
 
 const TICK_MS = 1500;
+const CELEBRATION_DURATION_MS = 4000;
 
 export function useSimulation() {
   const updateAgent = useDemoStore((s) => s.updateAgent);
@@ -12,6 +13,22 @@ export function useSimulation() {
   useEffect(() => {
     const id = setInterval(() => {
       const agents = useDemoStore.getState().agents;
+      const now = Date.now();
+
+      // Auto-clear expired celebrations
+      for (const agent of agents) {
+        if (
+          agent.activeCelebration &&
+          agent.celebrationStartedAt &&
+          now - agent.celebrationStartedAt > CELEBRATION_DURATION_MS
+        ) {
+          updateAgent(agent.id, {
+            activeCelebration: null,
+            celebrationStartedAt: null,
+          });
+        }
+      }
+
       const { agentUpdates, toasts } = simulateStep(agents);
 
       // Merge updates per agent so later changes don't overwrite earlier ones
