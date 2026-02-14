@@ -1,6 +1,7 @@
 import { StatsBar } from './StatsBar'
 import { AgentCard } from './AgentCard'
 import { ToastStack } from './Toast'
+import { CelebrationDeck } from './CelebrationDeck'
 
 export function HUD() {
   return (
@@ -12,6 +13,9 @@ export function HUD() {
 
       {/* Agent detail card */}
       <AgentCard />
+
+      {/* Manual office celebrations */}
+      <CelebrationDeck />
 
       {/* Toast notifications */}
       <ToastStack />

@@ -9,7 +9,16 @@ export type AgentStatus =
 
 export type AgentType = 'cursor' | 'cli' | 'mcp' | 'copilot'
 
-export type CelebrationType = 'confetti' | 'rocket' | 'sparkles' | 'explosion' | 'trophy'
+export type CelebrationType =
+  | 'confetti'
+  | 'rocket'
+  | 'sparkles'
+  | 'explosion'
+  | 'trophy'
+  | 'pizza_party'
+  | 'floppy_rain'
+  | 'dialup_wave'
+  | 'fax_blast'
 
 export type HairStyle = 'short' | 'long' | 'ponytail' | 'buzz' | 'mohawk'
 

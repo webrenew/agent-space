@@ -11,6 +11,10 @@ import { Rocket } from './effects/Rocket'
 import { Sparkles } from './effects/Sparkles'
 import { Explosion } from './effects/Explosion'
 import { Trophy } from './effects/Trophy'
+import { PizzaParty } from './effects/PizzaParty'
+import { FloppyRain } from './effects/FloppyRain'
+import { DialupWave } from './effects/DialupWave'
+import { FaxBlast } from './effects/FaxBlast'
 import { OfficePlant } from './effects/OfficePlant'
 
 interface AgentCharacterProps {
@@ -383,6 +387,50 @@ export function AgentCharacter({ agent, position }: AgentCharacterProps) {
       )}
       {agent.activeCelebration === 'trophy' && (
         <Trophy
+          position={[charPos[0], charPos[1], charPos[2]]}
+          onComplete={() => {
+            useAgentStore.getState().updateAgent(agent.id, {
+              activeCelebration: null,
+              celebrationStartedAt: null
+            })
+          }}
+        />
+      )}
+      {agent.activeCelebration === 'pizza_party' && (
+        <PizzaParty
+          position={[charPos[0], charPos[1], charPos[2]]}
+          onComplete={() => {
+            useAgentStore.getState().updateAgent(agent.id, {
+              activeCelebration: null,
+              celebrationStartedAt: null
+            })
+          }}
+        />
+      )}
+      {agent.activeCelebration === 'floppy_rain' && (
+        <FloppyRain
+          position={[charPos[0], charPos[1], charPos[2]]}
+          onComplete={() => {
+            useAgentStore.getState().updateAgent(agent.id, {
+              activeCelebration: null,
+              celebrationStartedAt: null
+            })
+          }}
+        />
+      )}
+      {agent.activeCelebration === 'dialup_wave' && (
+        <DialupWave
+          position={[charPos[0], charPos[1], charPos[2]]}
+          onComplete={() => {
+            useAgentStore.getState().updateAgent(agent.id, {
+              activeCelebration: null,
+              celebrationStartedAt: null
+            })
+          }}
+        />
+      )}
+      {agent.activeCelebration === 'fax_blast' && (
+        <FaxBlast
           position={[charPos[0], charPos[1], charPos[2]]}
           onComplete={() => {
             useAgentStore.getState().updateAgent(agent.id, {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useDemoStore } from "@/stores/useDemoStore";
 import { STATUS_LABELS, AGENT_COLORS } from "@/types";
 import type { AgentStatus } from "@/types";
+import type { CelebrationType } from "@/types";
 import { Minimap } from "./Minimap";
 
 const STATUS_COLOR: Record<AgentStatus, string> = {
@@ -286,6 +287,122 @@ function ToastStack() {
   );
 }
 
+interface PartyAction {
+  id: CelebrationType;
+  label: string;
+  note: string;
+  accent: string;
+}
+
+const PARTY_ACTIONS: PartyAction[] = [
+  { id: "pizza_party", label: "Pizza Party", note: "Late-night deploy fuel", accent: "#fbbf24" },
+  { id: "floppy_rain", label: "Floppy Rain", note: "3.5-inch victory storm", accent: "#60a5fa" },
+  { id: "dialup_wave", label: "Dial-Up Wave", note: "Modem handshake complete", accent: "#a78bfa" },
+  { id: "fax_blast", label: "Fax Blast", note: "Paper tray overclocked", accent: "#34d399" },
+];
+
+function PartyDeck() {
+  const agents = useDemoStore((s) => s.agents);
+  const selectedAgentId = useDemoStore((s) => s.selectedAgentId);
+  const updateAgent = useDemoStore((s) => s.updateAgent);
+  const addToast = useDemoStore((s) => s.addToast);
+
+  const selected = agents.find((a) => a.id === selectedAgentId) ?? null;
+
+  const triggerAction = (action: PartyAction) => {
+    const targets = selected ? [selected] : agents;
+    if (targets.length === 0) {
+      addToast({ type: "info", message: "No agents available for party mode" });
+      return;
+    }
+
+    const startedAt = Date.now();
+    targets.forEach((agent, index) => {
+      updateAgent(agent.id, {
+        activeCelebration: action.id,
+        celebrationStartedAt: startedAt + index * 55,
+      });
+    });
+
+    addToast({
+      type: "success",
+      message: selected
+        ? `${selected.name}: ${action.label}`
+        : `${action.label} launched for ${targets.length} agents`,
+    });
+  };
+
+  return (
+    <aside className="fixed top-[50px] right-4 z-30 hidden w-[240px] md:block">
+      <div
+        className="glass-panel"
+        style={{
+          borderRadius: 10,
+          padding: 8,
+          border: "1px solid rgba(84,140,90,0.35)",
+          background:
+            "linear-gradient(180deg, rgba(27,32,28,0.95), rgba(10,12,11,0.9)), repeating-linear-gradient(90deg, rgba(84,140,90,0.06) 0px, rgba(84,140,90,0.06) 1px, transparent 1px, transparent 6px)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 8,
+            color: "#9A9692",
+            fontSize: 10,
+            letterSpacing: 1,
+            textTransform: "uppercase",
+          }}
+        >
+          <span>Party Deck</span>
+          <span style={{ color: "#595653" }}>
+            {selected ? `target ${selected.name}` : "target all"}
+          </span>
+        </div>
+
+        <div style={{ display: "grid", gap: 6 }}>
+          {PARTY_ACTIONS.map((action) => (
+            <button
+              key={action.id}
+              type="button"
+              onClick={() => triggerAction(action)}
+              className="hover-row"
+              style={{
+                width: "100%",
+                borderRadius: 7,
+                border: `1px solid ${action.accent}66`,
+                background: "rgba(10,14,12,0.72)",
+                color: "#9A9692",
+                padding: "6px 9px",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+              title={action.note}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 1,
+                    background: action.accent,
+                    boxShadow: `0 0 8px ${action.accent}88`,
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ color: "#d6d2cd", fontWeight: 600, fontSize: 12 }}>{action.label}</span>
+              </div>
+              <div style={{ color: "#7f7a74", fontSize: 10, marginTop: 2 }}>{action.note}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 export function HUD() {
   const agents = useDemoStore((s) => s.agents);
 
@@ -307,6 +424,7 @@ export function HUD() {
         totalTokens={totalTokens}
         agentCount={agents.length}
       />
+      <PartyDeck />
 
       <aside className="fixed top-[50px] left-4 z-30 hidden w-[290px] md:block">
         <div
