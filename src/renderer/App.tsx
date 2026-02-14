@@ -3,6 +3,7 @@ import { WorkspaceLayout } from './components/workspace/WorkspaceLayout'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { useSettingsStore, loadSettings } from './store/settings'
+import { useWorkspaceStore } from './store/workspace'
 
 const LazySettingsPanel = lazy(async () => {
   const mod = await import('./components/SettingsPanel')
@@ -16,7 +17,10 @@ export function App() {
   const fontSize = useSettingsStore((s) => s.settings.appearance.fontSize)
 
   useEffect(() => {
-    loadSettings()
+    void (async () => {
+      await loadSettings()
+      await useWorkspaceStore.getState().initializeStartupWorkspace()
+    })()
     const unsub = window.electronAPI.settings.onOpenSettings(() => {
       openSettings()
     })
