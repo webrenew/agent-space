@@ -258,12 +258,10 @@ html, body, #root {
   cursor: pointer;
   border-radius: 4px;
   transition: color 0.15s ease, background 0.15s ease;
-  animation: pulse-amber 2s ease-in-out infinite;
 }
 .slot-hide-btn:hover {
   color: #c45050;
   background: rgba(196, 80, 80, 0.1);
-  animation: none;
 }
 
 /* ─── Panel resize divider (row) ───────────────────────────────────── */

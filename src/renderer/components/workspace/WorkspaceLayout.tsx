@@ -652,7 +652,7 @@ export function WorkspaceLayout() {
 
   // ── Render ─────────────────────────────────────────────────────
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0E0E0D' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0E0E0D', paddingRight: 8 }}>
       <TopNav visiblePanels={visiblePanels} onTogglePanel={handleTogglePanel} />
 
       <div ref={containerRef} style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>

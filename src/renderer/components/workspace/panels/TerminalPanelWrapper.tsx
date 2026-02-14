@@ -66,13 +66,20 @@ export function TerminalPanelWrapper() {
     }
   }, [addTerminal, removeTerminal, removeAgent])
 
-  // Auto-create a terminal on mount if none exist
+  // Auto-create a terminal on mount if none exist (with retry for IPC readiness)
   useEffect(() => {
     if (autoCreated.current) return
-    if (terminals.length === 0) {
-      autoCreated.current = true
-      void handleCreateTerminal()
+    const create = () => {
+      if (autoCreated.current) return
+      if (useAgentStore.getState().terminals.length === 0) {
+        autoCreated.current = true
+        void handleCreateTerminal()
+      }
     }
+    create()
+    // Retry after a short delay in case IPC wasn't ready on first attempt
+    const timer = setTimeout(create, 300)
+    return () => clearTimeout(timer)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for hotkey event from WorkspaceLayout (Cmd+Shift+N)
