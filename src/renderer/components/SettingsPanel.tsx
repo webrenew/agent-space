@@ -15,6 +15,7 @@ import type {
 } from '../types'
 import { DEFAULT_SETTINGS, SUBSCRIPTION_OPTIONS } from '../types'
 import { THEME_NAMES, THEME_LABELS, getTheme } from '../lib/terminalThemes'
+import { usePluginCatalog } from '../plugins/usePluginCatalog'
 
 type Tab = 'general' | 'appearance' | 'terminal' | 'scopes' | 'schedules' | 'subscription'
 
@@ -209,6 +210,7 @@ export function SettingsPanel() {
   const [schedulerLoading, setSchedulerLoading] = useState(false)
   const [schedulerError, setSchedulerError] = useState<string | null>(null)
   const [schedulerBusyId, setSchedulerBusyId] = useState<string | null>(null)
+  const pluginCatalog = usePluginCatalog()
 
   // Sync draft when modal opens
   useEffect(() => {
@@ -683,6 +685,45 @@ export function SettingsPanel() {
                 <div style={{ fontSize: 11, color: '#595653', lineHeight: 1.5, marginBottom: 8 }}>
                   Profiles let you isolate Claude settings, MCP config, and plugin dirs per workspace.
                 </div>
+                <div style={{ fontSize: 11, color: '#74747C', lineHeight: 1.5, marginBottom: 8 }}>
+                  Runtime discovery: {pluginCatalog.plugins.length} plugin{pluginCatalog.plugins.length === 1 ? '' : 's'}
+                  {' '}across {pluginCatalog.directories.length} dir{pluginCatalog.directories.length === 1 ? '' : 's'}.
+                </div>
+                {pluginCatalog.plugins.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                    {pluginCatalog.plugins.slice(0, 6).map((plugin) => (
+                      <span
+                        key={plugin.manifestPath}
+                        title={`${plugin.rootDir} (${plugin.source})`}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          border: '1px solid rgba(84,140,90,0.35)',
+                          background: 'rgba(84,140,90,0.12)',
+                          color: '#7FB887',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        {plugin.name}
+                      </span>
+                    ))}
+                    {pluginCatalog.plugins.length > 6 && (
+                      <span style={{ fontSize: 10, color: '#595653', alignSelf: 'center' }}>
+                        +{pluginCatalog.plugins.length - 6} more
+                      </span>
+                    )}
+                  </div>
+                )}
+                {pluginCatalog.warnings.length > 0 && (
+                  <div style={{ fontSize: 11, color: '#c87830', lineHeight: 1.5, marginBottom: 10 }}>
+                    {pluginCatalog.warnings.slice(0, 2).join(' • ')}
+                    {pluginCatalog.warnings.length > 2
+                      ? ` • +${pluginCatalog.warnings.length - 2} more`
+                      : ''}
+                  </div>
+                )}
 
                 {draft.claudeProfiles.profiles.map((profile) => (
                   <div
