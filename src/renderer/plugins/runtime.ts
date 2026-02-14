@@ -23,6 +23,13 @@ interface RegisteredPluginCommand {
   execute: PluginCommandDefinition['execute']
 }
 
+interface RegisteredPromptTransformer {
+  id: string
+  pluginId: string
+  order: number
+  transform: PluginPromptTransformerDefinition['transform']
+}
+
 type HooksByEvent = {
   [E in PluginHookEvent]: RegisteredHook<E>[]
 }
@@ -82,6 +89,33 @@ export interface PluginCommandExecutionResult {
   isError: boolean
 }
 
+export interface PluginPromptTransformContext {
+  chatSessionId: string
+  workspaceDirectory: string | null
+  agentId: string | null
+  rawMessage: string
+  prompt: string
+  mentionCount: number
+  attachmentCount: number
+}
+
+export interface PluginPromptTransformerDefinition {
+  transform: (
+    context: PluginPromptTransformContext
+  ) =>
+    | void
+    | string
+    | { prompt?: string; cancel?: boolean; error?: string }
+    | Promise<void | string | { prompt?: string; cancel?: boolean; error?: string }>
+}
+
+export interface PluginPromptTransformApplyResult {
+  prompt: string
+  transformed: boolean
+  canceled: boolean
+  errorMessage: string | null
+}
+
 export interface PluginCatalogSnapshot {
   directories: string[]
   plugins: RuntimeDiscoveredPlugin[]
@@ -114,6 +148,10 @@ interface RendererPluginApi {
   registerCommand: (
     command: PluginCommandDefinition
   ) => () => void
+  registerPromptTransformer: (
+    transformer: PluginPromptTransformerDefinition,
+    options?: { order?: number }
+  ) => () => void
   log: (level: 'info' | 'warn' | 'error', event: string, payload?: Record<string, unknown>) => void
   plugin: RawDiscoveredPlugin
 }
@@ -134,6 +172,7 @@ const pluginCatalogListeners = new Set<() => void>()
 const loadedPluginInstances = new Map<string, LoadedPluginInstance>()
 const pluginLoadErrors = new Map<string, string>()
 const pluginCommandsByName = new Map<string, RegisteredPluginCommand>()
+const promptTransformers: RegisteredPromptTransformer[] = []
 const IGNORED_CHILD_DIRS = new Set([
   'node_modules',
   '.git',
@@ -149,6 +188,7 @@ const IGNORED_CHILD_DIRS = new Set([
 
 let hookCounter = 0
 let commandCounter = 0
+let promptTransformerCounter = 0
 let runtimeInitialized = false
 let lastCatalogSignature = ''
 let pluginCatalogSnapshot: PluginCatalogSnapshot = {
@@ -308,6 +348,26 @@ function normalizeCommandExecutionOutput(
   }
 }
 
+function normalizePromptTransformOutput(
+  output: unknown
+): { nextPrompt: string | null; cancel: boolean; errorMessage: string | null } {
+  if (output === null || output === undefined) {
+    return { nextPrompt: null, cancel: false, errorMessage: null }
+  }
+  if (typeof output === 'string') {
+    return { nextPrompt: output, cancel: false, errorMessage: null }
+  }
+  const record = asRecord(output)
+  if (!record) {
+    return { nextPrompt: null, cancel: false, errorMessage: null }
+  }
+  return {
+    nextPrompt: asString(record.prompt),
+    cancel: record.cancel === true,
+    errorMessage: asString(record.error),
+  }
+}
+
 async function readJsonFile(filePath: string): Promise<Record<string, unknown> | null> {
   try {
     const file = await window.electronAPI.fs.readFile(filePath)
@@ -455,6 +515,31 @@ export function registerPluginCommand(
   }
 }
 
+export function registerPluginPromptTransformer(
+  transformer: PluginPromptTransformerDefinition,
+  options?: { pluginId?: string; order?: number }
+): () => void {
+  const entry: RegisteredPromptTransformer = {
+    id: `prompt-transformer-${++promptTransformerCounter}`,
+    pluginId: options?.pluginId ?? 'anonymous',
+    order: options?.order ?? 100,
+    transform: transformer.transform,
+  }
+  promptTransformers.push(entry)
+  promptTransformers.sort((a, b) => a.order - b.order)
+
+  return () => {
+    const index = promptTransformers.findIndex((candidate) => candidate.id === entry.id)
+    if (index >= 0) {
+      promptTransformers.splice(index, 1)
+    }
+  }
+}
+
+export function getRegisteredPromptTransformerCount(): number {
+  return promptTransformers.length
+}
+
 export function getRegisteredPluginCommands(): PluginCommandSummary[] {
   return Array.from(pluginCommandsByName.values())
     .map((command) => ({
@@ -524,6 +609,60 @@ export async function invokePluginCommand(
   }
 }
 
+export async function applyPluginPromptTransforms(
+  context: PluginPromptTransformContext
+): Promise<PluginPromptTransformApplyResult> {
+  if (promptTransformers.length === 0) {
+    return {
+      prompt: context.prompt,
+      transformed: false,
+      canceled: false,
+      errorMessage: null,
+    }
+  }
+
+  let currentPrompt = context.prompt
+  let transformed = false
+
+  for (const transformer of promptTransformers) {
+    try {
+      const output = await transformer.transform({
+        ...context,
+        prompt: currentPrompt,
+      })
+      const normalizedOutput = normalizePromptTransformOutput(output)
+      if (typeof normalizedOutput.nextPrompt === 'string') {
+        if (normalizedOutput.nextPrompt !== currentPrompt) {
+          transformed = true
+        }
+        currentPrompt = normalizedOutput.nextPrompt
+      }
+      if (normalizedOutput.cancel) {
+        return {
+          prompt: currentPrompt,
+          transformed,
+          canceled: true,
+          errorMessage: normalizedOutput.errorMessage
+            ?? `Prompt canceled by plugin ${transformer.pluginId}`,
+        }
+      }
+    } catch (err) {
+      logRendererEvent('warn', 'plugin.prompt_transform.failed', {
+        pluginId: transformer.pluginId,
+        transformerId: transformer.id,
+        error: toErrorMessage(err),
+      })
+    }
+  }
+
+  return {
+    prompt: currentPrompt,
+    transformed,
+    canceled: false,
+    errorMessage: null,
+  }
+}
+
 async function loadPluginModule(
   plugin: RawDiscoveredPlugin,
   entryPath: string
@@ -571,10 +710,28 @@ async function loadPluginModule(
     }
   }
 
+  const promptTransformDisposers: Array<() => void> = []
+  const registerPromptTransformerFromPlugin = (
+    transformer: PluginPromptTransformerDefinition,
+    options?: { order?: number }
+  ): (() => void) => {
+    const dispose = registerPluginPromptTransformer(transformer, {
+      pluginId: plugin.id,
+      order: options?.order,
+    })
+    promptTransformDisposers.push(dispose)
+    return () => {
+      const index = promptTransformDisposers.indexOf(dispose)
+      if (index >= 0) promptTransformDisposers.splice(index, 1)
+      runDisposer(dispose, 'prompt_transform_unregister', plugin.id)
+    }
+  }
+
   const api: RendererPluginApi = {
     registerHook: registerHookFromPlugin,
     on: registerHookFromPlugin,
     registerCommand: registerCommandFromPlugin,
+    registerPromptTransformer: registerPromptTransformerFromPlugin,
     log: (level, event, payload) => {
       logRendererEvent(level, `plugin.${plugin.id}.${event}`, payload)
     },
@@ -602,6 +759,10 @@ async function loadPluginModule(
     while (commandDisposers.length > 0) {
       const commandDispose = commandDisposers.pop()
       runDisposer(commandDispose, 'command_unregister', plugin.id)
+    }
+    while (promptTransformDisposers.length > 0) {
+      const promptTransformDispose = promptTransformDisposers.pop()
+      runDisposer(promptTransformDispose, 'prompt_transform_unregister', plugin.id)
     }
     while (hookDisposers.length > 0) {
       const hookDispose = hookDisposers.pop()
@@ -867,8 +1028,9 @@ function registerBuiltinCommands(): void {
         const commands = commandNames.length > 0
           ? commandNames.join(', ')
           : 'none'
+        const transformerCount = getRegisteredPromptTransformerCount()
         const reloadHint = 'Tip: use /plugins reload or /plugins-reload after editing plugin code.'
-        return `Plugins loaded: ${pluginList}\nCommands: ${commands}\n${reloadHint}`
+        return `Plugins loaded: ${pluginList}\nCommands: ${commands}\nPrompt transformers: ${transformerCount}\n${reloadHint}`
       },
     },
     { pluginId: 'builtin.runtime' }
@@ -898,5 +1060,6 @@ export function initializePluginRuntime(): void {
   logRendererEvent('info', 'plugin.runtime.initialized', {
     registeredEvents: Object.entries(hooksByEvent).map(([event, hooks]) => `${event}:${hooks.length}`),
     registeredCommands: getRegisteredPluginCommands().map((entry) => entry.name),
+    promptTransformers: getRegisteredPromptTransformerCount(),
   })
 }

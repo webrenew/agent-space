@@ -13,6 +13,7 @@ import { computeRunReward } from '../../lib/rewardEngine'
 import { logRendererEvent } from '../../lib/diagnostics'
 import { resolveClaudeProfile } from '../../lib/claudeProfile'
 import {
+  applyPluginPromptTransforms,
   emitPluginHook,
   getRegisteredPluginCommands,
   invokePluginCommand,
@@ -1205,6 +1206,41 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       // Persist user message to memories
       persistMessage(message, 'user', { directory: effectiveWorkingDir })
 
+      const promptTransformResult = await applyPluginPromptTransforms({
+        chatSessionId,
+        workspaceDirectory: effectiveWorkingDir,
+        agentId: agentIdRef.current,
+        rawMessage: message,
+        prompt,
+        mentionCount: mentionTokens.length,
+        attachmentCount: files?.length ?? 0,
+      })
+      if (promptTransformResult.canceled) {
+        const cancellationMessage = promptTransformResult.errorMessage
+          ?? 'Request canceled by a plugin prompt transformer.'
+        void emitPluginHook('message_sent', {
+          chatSessionId,
+          workspaceDirectory: effectiveWorkingDir,
+          agentId: agentIdRef.current,
+          timestamp: Date.now(),
+          role: 'error',
+          message: truncateForHook(cancellationMessage),
+          messageLength: cancellationMessage.length,
+        })
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextMessageId(),
+            role: 'error',
+            content: cancellationMessage,
+            timestamp: Date.now(),
+          },
+        ])
+        return
+      }
+
+      const promptForSend = promptTransformResult.prompt
+
       setStatus('running')
       activeRunDirectoryRef.current = effectiveWorkingDir
       runStartedAtRef.current = Date.now()
@@ -1313,15 +1349,16 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
         workspaceDirectory: effectiveWorkingDir,
         agentId,
         timestamp: Date.now(),
-        promptPreview: truncateForHook(prompt, 240),
-        promptLength: prompt.length,
+        promptPreview: truncateForHook(promptForSend, 240),
+        promptLength: promptForSend.length,
         mentionCount: mentionTokens.length,
         attachmentCount: files?.length ?? 0,
+        transformed: promptTransformResult.transformed,
       })
 
       try {
         const result = await window.electronAPI.claude.start({
-          prompt,
+          prompt: promptForSend,
           workingDirectory: effectiveWorkingDir ?? undefined,
           dangerouslySkipPermissions: yoloMode,
         })

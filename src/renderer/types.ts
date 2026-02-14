@@ -63,6 +63,7 @@ export interface PluginMessageSendingHook extends PluginHookBase {
   promptLength: number
   mentionCount: number
   attachmentCount: number
+  transformed: boolean
 }
 
 export interface PluginBeforeToolCallHook extends PluginHookBase {

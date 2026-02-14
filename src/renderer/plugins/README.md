@@ -37,9 +37,18 @@ export default function register(api) {
     execute: (context) => `hello from ${context.workspaceDirectory ?? 'no-dir'}`,
   })
 
+  const disposeTransform = api.registerPromptTransformer({
+    transform: (context) => {
+      if (context.workspaceDirectory?.includes('/demo')) {
+        return { prompt: `${context.prompt}\n\n[plugin note: demo workspace]` }
+      }
+    },
+  })
+
   return () => {
     disposeHook()
     disposeCommand()
+    disposeTransform()
   }
 }
 ```
@@ -58,6 +67,13 @@ Supported events:
 ### `api.registerCommand({ name, description?, execute })`
 
 Registers slash commands in chat input, for example `/hello`.
+
+### `api.registerPromptTransformer({ transform }, options?)`
+
+Runs before Claude execution. The transformer can:
+- return a new prompt string,
+- return `{ prompt }` to replace prompt,
+- return `{ cancel: true, error?: string }` to block the run.
 
 ### `api.log(level, event, payload?)`
 
