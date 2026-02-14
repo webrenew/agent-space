@@ -161,7 +161,7 @@ function generateSessionId(): string {
   return `chat-${++sessionCounter}-${Date.now()}`
 }
 
-function emitEvent(win: BrowserWindow, event: ClaudeEvent): void {
+function emitEvent(event: ClaudeEvent): void {
   // Broadcast to all windows (main + popped-out chat windows)
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) {
@@ -279,10 +279,7 @@ function parseStreamLine(
 
 // ── Session Management ─────────────────────────────────────────────────
 
-function startSession(
-  win: BrowserWindow,
-  options: ClaudeSessionOptions
-): string {
+function startSession(options: ClaudeSessionOptions): string {
   const sessionId = generateSessionId()
 
   // Resolve claude binary once
@@ -345,7 +342,7 @@ function startSession(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[claude-session] Failed to spawn claude CLI (${resolvedClaudePath}): ${message}`)
-    emitEvent(win, {
+    emitEvent({
       sessionId,
       type: 'error',
       data: { message: `Failed to spawn claude CLI: ${message}` },
@@ -365,7 +362,7 @@ function startSession(
 
     const event = parseStreamLine(sessionId, trimmed)
     if (event) {
-      emitEvent(win, event)
+      emitEvent(event)
     }
   })
 
@@ -377,7 +374,7 @@ function startSession(
 
   proc.on('error', (err: Error) => {
     console.error(`[claude-session] Process error for ${sessionId}: ${err.message}`)
-    emitEvent(win, {
+    emitEvent({
       sessionId,
       type: 'error',
       data: { message: `Process error: ${err.message}` },
@@ -390,7 +387,7 @@ function startSession(
 
     // If we didn't already send a result event, send one now
     if (code !== 0 && stderrBuffer.trim()) {
-      emitEvent(win, {
+      emitEvent({
         sessionId,
         type: 'error',
         data: {
@@ -400,7 +397,7 @@ function startSession(
     }
 
     // Always send a result event so the UI knows the session ended
-    emitEvent(win, {
+    emitEvent({
       sessionId,
       type: 'result',
       data: {
@@ -450,7 +447,7 @@ function stopSession(sessionId: string): void {
 
 let handlersRegistered = false
 
-export function setupClaudeSessionHandlers(mainWindow: BrowserWindow): void {
+export function setupClaudeSessionHandlers(_mainWindow: BrowserWindow): void {
   if (handlersRegistered) return
   handlersRegistered = true
 
@@ -471,7 +468,7 @@ export function setupClaudeSessionHandlers(mainWindow: BrowserWindow): void {
       workingDirectory: typeof opts.workingDirectory === 'string' ? opts.workingDirectory : undefined,
       dangerouslySkipPermissions: opts.dangerouslySkipPermissions === true,
     }
-    const sessionId = startSession(mainWindow, validated)
+    const sessionId = startSession(validated)
     return { sessionId }
   })
 

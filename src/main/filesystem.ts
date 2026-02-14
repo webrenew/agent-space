@@ -169,19 +169,34 @@ function fuzzyScore(nameLower: string, relPathLower: string, queryLower: string)
 // ── Setup IPC handlers ───────────────────────────────────────────────
 
 let handlersRegistered = false
+let dialogParentWindow: BrowserWindow | null = null
+
+function getDialogParentWindow(): BrowserWindow | undefined {
+  const focused = BrowserWindow.getFocusedWindow()
+  if (focused && !focused.isDestroyed()) return focused
+  if (dialogParentWindow && !dialogParentWindow.isDestroyed()) return dialogParentWindow
+  return undefined
+}
 
 export function setupFilesystemHandlers(mainWindow?: BrowserWindow): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    dialogParentWindow = mainWindow
+  }
+
   if (handlersRegistered) return
   handlersRegistered = true
 
   // Native "Open Folder" dialog — returns selected path or null
   ipcMain.handle('fs:openFolderDialog', async () => {
-    const win = mainWindow ?? BrowserWindow.getFocusedWindow() ?? undefined
+    const win = getDialogParentWindow()
     try {
-      const result = await dialog.showOpenDialog(win ?? ({} as BrowserWindow), {
-        properties: ['openDirectory'],
+      const dialogOpts = {
+        properties: ['openDirectory' as const],
         title: 'Open Folder',
-      })
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, dialogOpts)
+        : await dialog.showOpenDialog(dialogOpts)
       if (result.canceled || result.filePaths.length === 0) return null
       return result.filePaths[0]
     } catch (err) {

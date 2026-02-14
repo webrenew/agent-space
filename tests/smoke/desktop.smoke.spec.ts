@@ -68,6 +68,44 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
       await expect(mainWindow.locator('.slot-tab', { hasText: 'CHAT' }).first()).toBeVisible()
     }
 
+    // Regression check: folder dialog path should still work after close/reopen
+    // without targeting a destroyed BrowserWindow instance.
+    await electronApp.evaluate(({ dialog }) => {
+      const g = globalThis as Record<string, unknown>
+      g.__smokeOriginalShowOpenDialog = dialog.showOpenDialog
+      g.__smokeDialogCalls = 0
+      g.__smokeDialogParentDestroyed = null
+      dialog.showOpenDialog = async (...args: unknown[]) => {
+        g.__smokeDialogCalls = (Number(g.__smokeDialogCalls) || 0) + 1
+        const firstArg = args[0] as { isDestroyed?: () => boolean } | undefined
+        if (firstArg && typeof firstArg.isDestroyed === 'function') {
+          g.__smokeDialogParentDestroyed = firstArg.isDestroyed()
+        }
+        return { canceled: true, filePaths: [] }
+      }
+    })
+
+    await mainWindow.getByRole('button', { name: 'Choose folder' }).first().click()
+    const dialogProbe = await electronApp.evaluate(() => {
+      const g = globalThis as Record<string, unknown>
+      return {
+        calls: Number(g.__smokeDialogCalls) || 0,
+        parentDestroyed: g.__smokeDialogParentDestroyed === true,
+      }
+    })
+    expect(dialogProbe.calls).toBeGreaterThan(0)
+    expect(dialogProbe.parentDestroyed).toBe(false)
+    await electronApp.evaluate(({ dialog }) => {
+      const g = globalThis as Record<string, unknown>
+      const original = g.__smokeOriginalShowOpenDialog
+      if (typeof original === 'function') {
+        dialog.showOpenDialog = original as typeof dialog.showOpenDialog
+      }
+      delete g.__smokeOriginalShowOpenDialog
+      delete g.__smokeDialogCalls
+      delete g.__smokeDialogParentDestroyed
+    })
+
     tempFolder = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-space-smoke-'))
     const tempFolderName = path.basename(tempFolder)
 
