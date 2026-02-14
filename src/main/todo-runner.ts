@@ -147,11 +147,12 @@ function normalizeTodoItems(todoItems: string[]): string[] {
 }
 
 function normalizeJobInput(input: TodoRunnerJobInput): TodoRunnerJobInput {
+  const workingDirectory = input.workingDirectory.trim()
   return {
     id: input.id,
     name: input.name.trim(),
     prompt: input.prompt.trim(),
-    workingDirectory: path.resolve(input.workingDirectory.trim()),
+    workingDirectory: workingDirectory ? path.resolve(workingDirectory) : '',
     runnerCommand: input.runnerCommand.trim(),
     enabled: input.enabled === true,
     yoloMode: input.yoloMode === true,
