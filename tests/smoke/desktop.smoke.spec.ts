@@ -29,6 +29,14 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
 
     await expect(mainWindow.locator('.slot-tab', { hasText: 'CHAT' }).first()).toBeVisible()
 
+    // Regression check: duplicate ipcMain.handle registration should self-recover
+    // instead of crashing startup/reopen flows.
+    await electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.handle('smoke:duplicate-ipc', () => 'first')
+      ipcMain.handle('smoke:duplicate-ipc', () => 'second')
+      ipcMain.removeHandler('smoke:duplicate-ipc')
+    })
+
     if (process.platform === 'darwin') {
       await mainWindow.close()
       await expect

@@ -61,20 +61,36 @@ function patchIpcHandleWithTelemetry(): void {
 
   const originalHandle = ipcMain.handle.bind(ipcMain)
   type InvokeHandler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown | Promise<unknown>
+  const isDuplicateHandlerError = (err: unknown): boolean => {
+    const message = err instanceof Error ? err.message : String(err)
+    return message.includes('Attempted to register a second handler')
+  }
 
   ipcMain.handle = ((channel: string, listener: InvokeHandler) => {
     addStartupBreadcrumb('ipc.handle.register', { channel })
-    try {
-      const wrapped: InvokeHandler = async (event, ...args) => {
-        try {
-          return await listener(event, ...args)
-        } catch (err) {
-          recordIpcRuntimeError(channel, err)
-          throw err
-        }
+    const wrapped: InvokeHandler = async (event, ...args) => {
+      try {
+        return await listener(event, ...args)
+      } catch (err) {
+        recordIpcRuntimeError(channel, err)
+        throw err
       }
+    }
+
+    try {
       return originalHandle(channel, wrapped)
     } catch (err) {
+      if (isDuplicateHandlerError(err)) {
+        addStartupBreadcrumb('ipc.handle.duplicate_recovered', { channel })
+        recordTelemetryEvent('ipc.handle.duplicate_recovered', { channel })
+        try {
+          ipcMain.removeHandler(channel)
+          return originalHandle(channel, wrapped)
+        } catch (retryErr) {
+          recordIpcRegistrationError(channel, retryErr)
+          throw retryErr
+        }
+      }
       recordIpcRegistrationError(channel, err)
       throw err
     }
