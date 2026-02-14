@@ -15,6 +15,14 @@ interface RegisteredHook<E extends PluginHookEvent = PluginHookEvent> {
   handler: PluginHookHandler<E>
 }
 
+interface RegisteredPluginCommand {
+  id: string
+  name: string
+  pluginId: string
+  description: string | null
+  execute: PluginCommandDefinition['execute']
+}
+
 type HooksByEvent = {
   [E in PluginHookEvent]: RegisteredHook<E>[]
 }
@@ -37,9 +45,47 @@ export interface RuntimeDiscoveredPlugin extends RawDiscoveredPlugin {
   loadError: string | null
 }
 
+export interface PluginCommandContext {
+  chatSessionId: string
+  workspaceDirectory: string | null
+  agentId: string | null
+  rawMessage: string
+  argsRaw: string
+  args: string[]
+  attachmentNames: string[]
+  mentionPaths: string[]
+}
+
+export interface PluginCommandDefinition {
+  name: string
+  description?: string
+  execute: (
+    context: PluginCommandContext
+  ) =>
+    | void
+    | string
+    | { message?: string; isError?: boolean; error?: string }
+    | Promise<void | string | { message?: string; isError?: boolean; error?: string }>
+}
+
+export interface PluginCommandSummary {
+  name: string
+  pluginId: string
+  description: string | null
+}
+
+export interface PluginCommandExecutionResult {
+  handled: boolean
+  commandName: string
+  pluginId: string | null
+  message: string | null
+  isError: boolean
+}
+
 export interface PluginCatalogSnapshot {
   directories: string[]
   plugins: RuntimeDiscoveredPlugin[]
+  commands: PluginCommandSummary[]
   warnings: string[]
   syncedAt: number
 }
@@ -65,6 +111,9 @@ interface RendererPluginApi {
     handler: PluginHookHandler<E>,
     options?: { order?: number }
   ) => () => void
+  registerCommand: (
+    command: PluginCommandDefinition
+  ) => () => void
   log: (level: 'info' | 'warn' | 'error', event: string, payload?: Record<string, unknown>) => void
   plugin: RawDiscoveredPlugin
 }
@@ -83,6 +132,7 @@ const hooksByEvent: HooksByEvent = {
 const pluginCatalogListeners = new Set<() => void>()
 const loadedPluginInstances = new Map<string, LoadedPluginInstance>()
 const pluginLoadErrors = new Map<string, string>()
+const pluginCommandsByName = new Map<string, RegisteredPluginCommand>()
 const IGNORED_CHILD_DIRS = new Set([
   'node_modules',
   '.git',
@@ -97,11 +147,13 @@ const IGNORED_CHILD_DIRS = new Set([
 ])
 
 let hookCounter = 0
+let commandCounter = 0
 let runtimeInitialized = false
 let lastCatalogSignature = ''
 let pluginCatalogSnapshot: PluginCatalogSnapshot = {
   directories: [],
   plugins: [],
+  commands: [],
   warnings: [],
   syncedAt: 0,
 }
@@ -193,6 +245,65 @@ function runDisposer(
       pluginId,
       error: toErrorMessage(err),
     })
+  }
+}
+
+function normalizeCommandName(rawName: string): string | null {
+  const trimmed = rawName.trim()
+  if (!trimmed) return null
+  const withoutPrefix = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed
+  const normalized = withoutPrefix.trim().toLowerCase()
+  if (!normalized) return null
+  if (!/^[a-z0-9._-]+$/.test(normalized)) return null
+  return normalized
+}
+
+function updatePluginCatalogSnapshot(next: PluginCatalogSnapshot): void {
+  pluginCatalogSnapshot = next
+  for (const listener of pluginCatalogListeners) {
+    try {
+      listener()
+    } catch (err) {
+      console.error('[plugins] listener failure:', err)
+    }
+  }
+}
+
+function refreshSnapshotCommands(): void {
+  if (pluginCatalogSnapshot.syncedAt === 0) return
+  updatePluginCatalogSnapshot({
+    ...pluginCatalogSnapshot,
+    commands: getRegisteredPluginCommands(),
+    syncedAt: Date.now(),
+  })
+}
+
+function normalizeCommandExecutionOutput(
+  output: unknown
+): { message: string | null; isError: boolean } {
+  if (output === null || output === undefined) {
+    return { message: null, isError: false }
+  }
+  if (typeof output === 'string') {
+    const message = output.trim()
+    return { message: message || null, isError: false }
+  }
+  const record = asRecord(output)
+  if (record) {
+    const messageFromMessage = asString(record.message)
+    const messageFromError = asString(record.error)
+    const isError = record.isError === true || Boolean(messageFromError)
+    if (messageFromMessage) {
+      return { message: messageFromMessage, isError }
+    }
+    if (messageFromError) {
+      return { message: messageFromError, isError: true }
+    }
+  }
+  try {
+    return { message: JSON.stringify(output), isError: false }
+  } catch {
+    return { message: String(output), isError: false }
   }
 }
 
@@ -306,6 +417,112 @@ async function resolveRendererEntryPath(plugin: RawDiscoveredPlugin, homeDir: st
   return isAbsolutePath(expanded) ? expanded : joinPath(plugin.rootDir, expanded)
 }
 
+export function registerPluginCommand(
+  command: PluginCommandDefinition,
+  options?: { pluginId?: string }
+): () => void {
+  const normalizedName = normalizeCommandName(command.name)
+  if (!normalizedName) {
+    throw new Error(`Invalid plugin command name: ${command.name}`)
+  }
+
+  const registered: RegisteredPluginCommand = {
+    id: `command-${++commandCounter}`,
+    name: normalizedName,
+    pluginId: options?.pluginId ?? 'anonymous',
+    description: asString(command.description) ?? null,
+    execute: command.execute,
+  }
+
+  const existing = pluginCommandsByName.get(normalizedName)
+  if (existing && existing.id !== registered.id) {
+    logRendererEvent('warn', 'plugin.command.replaced', {
+      commandName: normalizedName,
+      replacedPluginId: existing.pluginId,
+      pluginId: registered.pluginId,
+    })
+  }
+
+  pluginCommandsByName.set(normalizedName, registered)
+  refreshSnapshotCommands()
+
+  return () => {
+    const current = pluginCommandsByName.get(normalizedName)
+    if (!current || current.id !== registered.id) return
+    pluginCommandsByName.delete(normalizedName)
+    refreshSnapshotCommands()
+  }
+}
+
+export function getRegisteredPluginCommands(): PluginCommandSummary[] {
+  return Array.from(pluginCommandsByName.values())
+    .map((command) => ({
+      name: command.name,
+      pluginId: command.pluginId,
+      description: command.description,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+}
+
+export async function invokePluginCommand(
+  commandName: string,
+  context: PluginCommandContext
+): Promise<PluginCommandExecutionResult> {
+  const normalizedName = normalizeCommandName(commandName)
+  if (!normalizedName) {
+    return {
+      handled: false,
+      commandName: commandName.trim(),
+      pluginId: null,
+      message: null,
+      isError: false,
+    }
+  }
+
+  const command = pluginCommandsByName.get(normalizedName)
+  if (!command) {
+    return {
+      handled: false,
+      commandName: normalizedName,
+      pluginId: null,
+      message: null,
+      isError: false,
+    }
+  }
+
+  try {
+    const output = await command.execute(context)
+    const normalizedOutput = normalizeCommandExecutionOutput(output)
+    logRendererEvent('info', 'plugin.command.executed', {
+      pluginId: command.pluginId,
+      commandName: normalizedName,
+      hasMessage: Boolean(normalizedOutput.message),
+      isError: normalizedOutput.isError,
+    })
+    return {
+      handled: true,
+      commandName: normalizedName,
+      pluginId: command.pluginId,
+      message: normalizedOutput.message,
+      isError: normalizedOutput.isError,
+    }
+  } catch (err) {
+    const errorMessage = toErrorMessage(err)
+    logRendererEvent('warn', 'plugin.command.failed', {
+      pluginId: command.pluginId,
+      commandName: normalizedName,
+      error: errorMessage,
+    })
+    return {
+      handled: true,
+      commandName: normalizedName,
+      pluginId: command.pluginId,
+      message: errorMessage,
+      isError: true,
+    }
+  }
+}
+
 async function loadPluginModule(
   plugin: RawDiscoveredPlugin,
   entryPath: string
@@ -342,9 +559,21 @@ async function loadPluginModule(
     }
   }
 
+  const commandDisposers: Array<() => void> = []
+  const registerCommandFromPlugin = (command: PluginCommandDefinition): (() => void) => {
+    const dispose = registerPluginCommand(command, { pluginId: plugin.id })
+    commandDisposers.push(dispose)
+    return () => {
+      const index = commandDisposers.indexOf(dispose)
+      if (index >= 0) commandDisposers.splice(index, 1)
+      runDisposer(dispose, 'command_unregister', plugin.id)
+    }
+  }
+
   const api: RendererPluginApi = {
     registerHook: registerHookFromPlugin,
     on: registerHookFromPlugin,
+    registerCommand: registerCommandFromPlugin,
     log: (level, event, payload) => {
       logRendererEvent(level, `plugin.${plugin.id}.${event}`, payload)
     },
@@ -368,6 +597,10 @@ async function loadPluginModule(
     while (pluginCleanupCandidates.length > 0) {
       const candidate = pluginCleanupCandidates.pop()
       runDisposer(candidate, 'plugin_unregister', plugin.id)
+    }
+    while (commandDisposers.length > 0) {
+      const commandDispose = commandDisposers.pop()
+      runDisposer(commandDispose, 'command_unregister', plugin.id)
     }
     while (hookDisposers.length > 0) {
       const hookDispose = hookDisposers.pop()
@@ -453,17 +686,6 @@ function toRuntimePlugin(plugin: RawDiscoveredPlugin): RuntimeDiscoveredPlugin {
     ...plugin,
     loadState: 'failed',
     loadError: pluginLoadErrors.get(plugin.manifestPath) ?? 'Renderer entry failed to load',
-  }
-}
-
-function updatePluginCatalogSnapshot(next: PluginCatalogSnapshot): void {
-  pluginCatalogSnapshot = next
-  for (const listener of pluginCatalogListeners) {
-    try {
-      listener()
-    } catch (err) {
-      console.error('[plugins] listener failure:', err)
-    }
   }
 }
 
@@ -553,6 +775,7 @@ export async function syncPluginCatalog(pluginDirs: string[]): Promise<PluginCat
   const snapshot: PluginCatalogSnapshot = {
     directories: scannedDirectories,
     plugins: runtimePlugins,
+    commands: getRegisteredPluginCommands(),
     warnings: [...discoveryWarnings, ...loadWarnings],
     syncedAt: Date.now(),
   }
@@ -565,6 +788,7 @@ export async function syncPluginCatalog(pluginDirs: string[]): Promise<PluginCat
     scannedDirectories: scannedDirectories.length,
     discoveredPlugins: discoveredPlugins.length,
     loadedPlugins: runtimePlugins.filter((plugin) => plugin.loadState === 'loaded').length,
+    registeredCommands: snapshot.commands.length,
     warnings: snapshot.warnings.length,
   })
 
@@ -623,13 +847,36 @@ export async function emitPluginHook<E extends PluginHookEvent>(
   }
 }
 
+function registerBuiltinCommands(): void {
+  registerPluginCommand(
+    {
+      name: 'plugins',
+      description: 'List loaded renderer plugins and commands.',
+      execute: () => {
+        const loaded = pluginCatalogSnapshot.plugins.filter((plugin) => plugin.loadState === 'loaded')
+        const commandNames = getRegisteredPluginCommands().map((command) => `/${command.name}`)
+        const pluginList = loaded.length > 0
+          ? loaded.map((plugin) => plugin.name).join(', ')
+          : 'none'
+        const commands = commandNames.length > 0
+          ? commandNames.join(', ')
+          : 'none'
+        return `Plugins loaded: ${pluginList}\nCommands: ${commands}`
+      },
+    },
+    { pluginId: 'builtin.runtime' }
+  )
+}
+
 export function initializePluginRuntime(): void {
   if (runtimeInitialized) return
   runtimeInitialized = true
 
   registerDiagnosticsHooks(registerPluginHook)
+  registerBuiltinCommands()
   void syncPluginCatalogFromSettings()
   logRendererEvent('info', 'plugin.runtime.initialized', {
     registeredEvents: Object.entries(hooksByEvent).map(([event, hooks]) => `${event}:${hooks.length}`),
+    registeredCommands: getRegisteredPluginCommands().map((entry) => entry.name),
   })
 }

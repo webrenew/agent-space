@@ -12,7 +12,11 @@ import { buildWorkspaceContextPrompt } from '../../lib/workspaceContext'
 import { computeRunReward } from '../../lib/rewardEngine'
 import { logRendererEvent } from '../../lib/diagnostics'
 import { resolveClaudeProfile } from '../../lib/claudeProfile'
-import { emitPluginHook } from '../../plugins/runtime'
+import {
+  emitPluginHook,
+  getRegisteredPluginCommands,
+  invokePluginCommand,
+} from '../../plugins/runtime'
 import { ChatMessageBubble } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 
@@ -73,6 +77,26 @@ function extractMentionPaths(message: string): string[] {
     mentions.push(normalized)
   }
   return mentions
+}
+
+function parseSlashCommandInput(message: string): {
+  name: string
+  argsRaw: string
+  args: string[]
+} | null {
+  const trimmed = message.trim()
+  if (!trimmed.startsWith('/')) return null
+  if (trimmed.startsWith('//')) return null
+  const firstSpace = trimmed.indexOf(' ')
+  const token = firstSpace >= 0 ? trimmed.slice(1, firstSpace) : trimmed.slice(1)
+  const name = token.trim()
+  if (!name) return null
+  const argsRaw = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : ''
+  return {
+    name,
+    argsRaw,
+    args: argsRaw ? argsRaw.split(/\s+/).filter(Boolean) : [],
+  }
 }
 
 interface UsageSnapshot {
@@ -974,6 +998,101 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
           })
           return
         }
+      }
+
+      const slashCommand = parseSlashCommandInput(message)
+      if (slashCommand) {
+        const mentionTokens = mentions && mentions.length > 0
+          ? mentions
+          : extractMentionPaths(message)
+        const now = Date.now()
+        void emitPluginHook('message_received', {
+          chatSessionId,
+          workspaceDirectory: effectiveWorkingDir,
+          agentId: agentIdRef.current,
+          timestamp: now,
+          message: truncateForHook(message),
+          messageLength: message.length,
+          mentionCount: mentionTokens.length,
+          attachmentCount: files?.length ?? 0,
+        })
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextMessageId(),
+            role: 'user',
+            content: message,
+            timestamp: now,
+          },
+        ])
+        persistMessage(message, 'user', { directory: effectiveWorkingDir })
+
+        const commandResult = await invokePluginCommand(slashCommand.name, {
+          chatSessionId,
+          workspaceDirectory: effectiveWorkingDir,
+          agentId: agentIdRef.current,
+          rawMessage: message,
+          argsRaw: slashCommand.argsRaw,
+          args: slashCommand.args,
+          attachmentNames: files?.map((file) => file.name) ?? [],
+          mentionPaths: mentionTokens,
+        })
+
+        if (!commandResult.handled) {
+          const knownCommands = getRegisteredPluginCommands()
+          const commandsPreview = knownCommands.slice(0, 6).map((entry) => `/${entry.name}`)
+          const hint = knownCommands.length > 0
+            ? `Available commands: ${commandsPreview.join(', ')}${knownCommands.length > 6 ? ', ...' : ''}`
+            : 'No plugin commands are currently loaded.'
+          const messageText = `Unknown command "/${slashCommand.name}". ${hint}`
+          void emitPluginHook('message_sent', {
+            chatSessionId,
+            workspaceDirectory: effectiveWorkingDir,
+            agentId: agentIdRef.current,
+            timestamp: Date.now(),
+            role: 'error',
+            message: truncateForHook(messageText),
+            messageLength: messageText.length,
+          })
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextMessageId(),
+              role: 'error',
+              content: messageText,
+              timestamp: Date.now(),
+            },
+          ])
+          return
+        }
+
+        const responseText = commandResult.message
+        if (responseText) {
+          const responseRole: 'assistant' | 'error' = commandResult.isError ? 'error' : 'assistant'
+          void emitPluginHook('message_sent', {
+            chatSessionId,
+            workspaceDirectory: effectiveWorkingDir,
+            agentId: agentIdRef.current,
+            timestamp: Date.now(),
+            role: responseRole,
+            message: truncateForHook(responseText),
+            messageLength: responseText.length,
+          })
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: nextMessageId(),
+              role: responseRole,
+              content: responseText,
+              timestamp: Date.now(),
+            },
+          ])
+          if (!commandResult.isError) {
+            persistMessage(responseText, 'assistant', { directory: effectiveWorkingDir })
+          }
+        }
+        return
       }
 
       // Build the prompt with file + workspace context

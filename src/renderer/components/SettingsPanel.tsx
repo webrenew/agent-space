@@ -689,6 +689,36 @@ export function SettingsPanel() {
                   Runtime discovery: {pluginCatalog.plugins.length} plugin{pluginCatalog.plugins.length === 1 ? '' : 's'}
                   {' '}across {pluginCatalog.directories.length} dir{pluginCatalog.directories.length === 1 ? '' : 's'}.
                 </div>
+                <div style={{ fontSize: 11, color: '#74747C', lineHeight: 1.5, marginBottom: 8 }}>
+                  Runtime commands: {pluginCatalog.commands.length} registered.
+                </div>
+                {pluginCatalog.commands.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                    {pluginCatalog.commands.slice(0, 6).map((command) => (
+                      <span
+                        key={`${command.pluginId}:${command.name}`}
+                        title={`${command.description ?? 'No description'} (${command.pluginId})`}
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          border: '1px solid rgba(76,137,217,0.35)',
+                          background: 'rgba(76,137,217,0.12)',
+                          color: '#4C89D9',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        /{command.name}
+                      </span>
+                    ))}
+                    {pluginCatalog.commands.length > 6 && (
+                      <span style={{ fontSize: 10, color: '#595653', alignSelf: 'center' }}>
+                        +{pluginCatalog.commands.length - 6} more
+                      </span>
+                    )}
+                  </div>
+                )}
                 {pluginCatalog.plugins.length > 0 && (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
                     {pluginCatalog.plugins.slice(0, 6).map((plugin) => (
