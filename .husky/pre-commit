@@ -1,2 +1,3 @@
 pnpm run lint
+pnpm run lint:web
 pnpm run typecheck

@@ -1,0 +1,36 @@
+{
+  "tasks": [
+    {
+      "id": "long-run-refactor",
+      "name": "Refactor session manager",
+      "workingDirectory": "/Users/tradecraft/dev/agent-space",
+      "prompt": "Refactor src/main/claude-session.ts to reduce duplication around spawn configuration, keep behavior unchanged, run relevant tests or checks, and commit changes with a clear message.",
+      "enabled": true,
+      "model": "",
+      "systemPrompt": "",
+      "allowedTools": [],
+      "dangerouslySkipPermissions": false,
+      "maxAttempts": 3,
+      "retryDelayMs": 30000,
+      "runTimeoutMs": 0,
+      "repeatDelayMs": 0,
+      "successRegex": ""
+    },
+    {
+      "id": "nightly-health-check",
+      "name": "Nightly repository health check",
+      "workingDirectory": "/Users/tradecraft/dev/agent-space",
+      "prompt": "Run a non-destructive health check: inspect git status, run lint or typecheck if configured, summarize failures and likely root causes, and suggest the smallest next fix.",
+      "enabled": false,
+      "model": "",
+      "systemPrompt": "",
+      "allowedTools": [],
+      "dangerouslySkipPermissions": false,
+      "maxAttempts": 2,
+      "retryDelayMs": 60000,
+      "runTimeoutMs": 0,
+      "repeatDelayMs": 86400000,
+      "successRegex": ""
+    }
+  ]
+}
