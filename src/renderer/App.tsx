@@ -1,11 +1,16 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { WorkspaceLayout } from './components/workspace/WorkspaceLayout'
-import { SettingsPanel } from './components/SettingsPanel'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useSettingsStore, loadSettings } from './store/settings'
 
+const LazySettingsPanel = lazy(async () => {
+  const mod = await import('./components/SettingsPanel')
+  return { default: mod.SettingsPanel }
+})
+
 export function App() {
   const openSettings = useSettingsStore((s) => s.openSettings)
+  const isSettingsOpen = useSettingsStore((s) => s.isOpen)
   const fontFamily = useSettingsStore((s) => s.settings.appearance.fontFamily)
   const fontSize = useSettingsStore((s) => s.settings.appearance.fontSize)
 
@@ -29,7 +34,11 @@ export function App() {
       <ErrorBoundary fallbackLabel="WorkspaceLayout">
         <WorkspaceLayout />
       </ErrorBoundary>
-      <SettingsPanel />
+      {isSettingsOpen ? (
+        <Suspense fallback={null}>
+          <LazySettingsPanel />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

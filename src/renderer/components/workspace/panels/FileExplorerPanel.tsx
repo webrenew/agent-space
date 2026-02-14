@@ -128,14 +128,6 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
     }
   }, [openFolder])
 
-  // Listen for menu-driven "Open Folder" IPC
-  useEffect(() => {
-    const unsub = window.electronAPI.fs.onOpenFolder((folderPath: string) => {
-      openFolder(folderPath)
-    })
-    return unsub
-  }, [openFolder])
-
   // Load displayed directory
   useEffect(() => {
     if (!browsePath) return

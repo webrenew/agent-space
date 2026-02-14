@@ -6,6 +6,7 @@
  * and wires diagnostics back into Monaco markers.
  */
 
+import '../../../monaco-setup'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Editor, { type OnMount, type Monaco } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'

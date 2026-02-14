@@ -68,7 +68,7 @@ export const DEFAULT_LAYOUT: Layout = [
     width: 0.35,
     rows: [
       { slots: ['scene3d'], slotWidths: [1], height: 260 },
-      { slots: [['filePreview', 'activity']], slotWidths: [1], height: -1 },
+      { slots: [['activity', 'filePreview']], slotWidths: [1], height: -1 },
     ],
   },
 ]

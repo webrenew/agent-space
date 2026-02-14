@@ -1,4 +1,14 @@
-import { useState, useCallback, useRef, useEffect, Fragment, type ComponentType } from 'react'
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  Fragment,
+  lazy,
+  Suspense,
+  type ComponentType,
+  type LazyExoticComponent,
+} from 'react'
 import { RowDivider } from './RowDivider'
 import { ColDivider } from './ColDivider'
 import {
@@ -16,16 +26,8 @@ import {
   clampDropZone,
   findAllPanelsInLayout,
 } from './layout-engine'
-import { ScenePanel } from './panels/ScenePanel'
 import { ChatPanelWrapper } from './panels/ChatPanelWrapper'
 import { TerminalPanelWrapper } from './panels/TerminalPanelWrapper'
-import { ActivityPanel } from './panels/ActivityPanel'
-import { AgentsPanel } from './panels/AgentsPanel'
-import { RecentMemoriesPanel } from './panels/RecentMemoriesPanel'
-import { TokensPanel } from './panels/TokensPanel'
-import { FileExplorerPanel } from './panels/FileExplorerPanel'
-import { FileSearchPanel } from './panels/FileSearchPanel'
-import { FileEditorPanel } from './panels/FileEditorPanel'
 import { useAgentStore } from '../../store/agents'
 import { useSettingsStore } from '../../store/settings'
 import { useWorkspaceStore } from '../../store/workspace'
@@ -52,27 +54,129 @@ function dispatchFileOpen(filePath: string): void {
   window.dispatchEvent(new CustomEvent('file:open', { detail: filePath }))
 }
 
+const LazyScenePanel = lazy(async () => {
+  const mod = await import('./panels/ScenePanel')
+  return { default: mod.ScenePanel }
+})
+
+const LazyActivityPanel = lazy(async () => {
+  const mod = await import('./panels/ActivityPanel')
+  return { default: mod.ActivityPanel }
+})
+
+const LazyAgentsPanel = lazy(async () => {
+  const mod = await import('./panels/AgentsPanel')
+  return { default: mod.AgentsPanel }
+})
+
+const LazyRecentMemoriesPanel = lazy(async () => {
+  const mod = await import('./panels/RecentMemoriesPanel')
+  return { default: mod.RecentMemoriesPanel }
+})
+
+const LazyTokensPanel = lazy(async () => {
+  const mod = await import('./panels/TokensPanel')
+  return { default: mod.TokensPanel }
+})
+
+const LazyFileExplorerPanel = lazy(async () => {
+  const mod = await import('./panels/FileExplorerPanel')
+  return { default: mod.FileExplorerPanel }
+})
+
+const LazyFileSearchPanel = lazy(async () => {
+  const mod = await import('./panels/FileSearchPanel')
+  return { default: mod.FileSearchPanel }
+})
+
+const LazyFileEditorPanel = lazy(async () => {
+  const mod = await import('./panels/FileEditorPanel')
+  return { default: mod.FileEditorPanel }
+})
+
 function FileExplorerWrapper() {
-  return <FileExplorerPanel onOpenFile={dispatchFileOpen} />
+  return <LazyFileExplorerPanel onOpenFile={dispatchFileOpen} />
 }
 
 function FileSearchWrapper() {
-  return <FileSearchPanel onOpenFile={dispatchFileOpen} />
+  return <LazyFileSearchPanel onOpenFile={dispatchFileOpen} />
 }
 
 // ── Panel Registry ──────────────────────────────────────────────────
 
-const PANEL_COMPONENTS: Record<PanelId, ComponentType> = {
+type PanelComponent = ComponentType | LazyExoticComponent<ComponentType>
+
+const PANEL_COMPONENTS: Record<PanelId, PanelComponent> = {
   chat: ChatPanelWrapper,
   terminal: TerminalPanelWrapper,
-  tokens: TokensPanel,
-  scene3d: ScenePanel,
-  activity: ActivityPanel,
-  agents: AgentsPanel,
-  recentMemories: RecentMemoriesPanel,
+  tokens: LazyTokensPanel,
+  scene3d: LazyScenePanel,
+  activity: LazyActivityPanel,
+  agents: LazyAgentsPanel,
+  recentMemories: LazyRecentMemoriesPanel,
   fileExplorer: FileExplorerWrapper,
   fileSearch: FileSearchWrapper,
-  filePreview: FileEditorPanel,
+  filePreview: LazyFileEditorPanel,
+}
+
+function PanelLoading({ panelId }: { panelId: PanelId }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100%',
+        color: '#595653',
+        fontSize: 12,
+        letterSpacing: 0.5,
+      }}
+    >
+      Loading {PANEL_LABELS[panelId]}...
+    </div>
+  )
+}
+
+function SlotPanelContent({
+  panels,
+  activePanel,
+}: {
+  panels: PanelId[]
+  activePanel: PanelId
+}) {
+  const [mountedPanels, setMountedPanels] = useState<PanelId[]>(() => [activePanel])
+  const panelsKey = panels.join('|')
+
+  useEffect(() => {
+    setMountedPanels((prev) => {
+      const allowed = new Set(panels)
+      const filtered = prev.filter((pid) => allowed.has(pid))
+      return filtered.includes(activePanel) ? filtered : [...filtered, activePanel]
+    })
+  }, [activePanel, panelsKey])
+
+  return (
+    <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+      {mountedPanels.map((pid) => {
+        const Comp = PANEL_COMPONENTS[pid]
+        return (
+          <div
+            key={pid}
+            style={{
+              display: pid === activePanel ? 'flex' : 'none',
+              flexDirection: 'column',
+              height: '100%',
+              overflow: 'hidden',
+            }}
+          >
+            <Suspense fallback={<PanelLoading panelId={pid} />}>
+              <Comp />
+            </Suspense>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 // ── Top Nav ─────────────────────────────────────────────────────────
@@ -488,6 +592,7 @@ export function WorkspaceLayout() {
 
   // ── Keyboard shortcuts ────────────────────────────────────────
   const openSettings = useSettingsStore((s) => s.openSettings)
+  const openFolder = useWorkspaceStore((s) => s.openFolder)
 
   const hotkeyBindings: HotkeyBinding[] = [
     // Cmd+1 through Cmd+8: focus panels
@@ -611,6 +716,15 @@ export function WorkspaceLayout() {
 
   useHotkeys(hotkeyBindings)
 
+  // Handle menu-driven "Open Folder" even when Explorer panel is not mounted.
+  useEffect(() => {
+    const api = window.electronAPI?.fs
+    if (!api?.onOpenFolder) return
+    return api.onOpenFolder((folderPath: string) => {
+      openFolder(folderPath)
+    })
+  }, [openFolder])
+
   // ── Electron menu IPC listeners ───────────────────────────────
   useEffect(() => {
     const api = window.electronAPI?.settings
@@ -698,22 +812,7 @@ export function WorkspaceLayout() {
                                 onHideSlot={() => handleHideSlot(panels)}
                                 onDragStart={handleDragStart}
                               />
-                              <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-                                {panels.map((pid) => {
-                                  const Comp = PANEL_COMPONENTS[pid]
-                                  return (
-                                    <div
-                                      key={pid}
-                                      style={{
-                                        display: pid === activePanel ? 'flex' : 'none',
-                                        flexDirection: 'column', height: '100%', overflow: 'hidden',
-                                      }}
-                                    >
-                                      <Comp />
-                                    </div>
-                                  )
-                                })}
-                              </div>
+                              <SlotPanelContent key={slotKey} panels={panels} activePanel={activePanel} />
                               <DropOverlay zone={dropZone} colIdx={colIdx} rowIdx={rowIdx} slotIdx={slotIdx} />
                             </div>
                             {slotIdx < row.slots.length - 1 && (

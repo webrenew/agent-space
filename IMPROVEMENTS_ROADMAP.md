@@ -24,7 +24,7 @@ Last updated: 2026-02-14
 
 ## Phase 2 - Performance and UX
 
-- [ ] **Startup and bundle optimization**
+- [x] **Startup and bundle optimization**
   - Goal: faster launch + lower memory.
   - Focus:
     - lazy-load Monaco/workers
