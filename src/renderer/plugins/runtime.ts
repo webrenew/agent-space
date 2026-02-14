@@ -159,6 +159,8 @@ interface RendererPluginApi {
 type RegisterPluginFunction = (api: RendererPluginApi) => unknown | Promise<unknown>
 
 const hooksByEvent: HooksByEvent = {
+  before_agent_start: [],
+  agent_end: [],
   session_start: [],
   session_end: [],
   message_received: [],
@@ -166,6 +168,7 @@ const hooksByEvent: HooksByEvent = {
   message_sent: [],
   before_tool_call: [],
   after_tool_call: [],
+  tool_result_persist: [],
 }
 
 const pluginCatalogListeners = new Set<() => void>()

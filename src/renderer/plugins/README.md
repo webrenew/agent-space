@@ -56,6 +56,8 @@ export default function register(api) {
 ### `api.registerHook(event, handler, options?)`
 
 Supported events:
+- `before_agent_start`
+- `agent_end`
 - `session_start`
 - `session_end`
 - `message_received`
@@ -63,6 +65,9 @@ Supported events:
 - `message_sent`
 - `before_tool_call`
 - `after_tool_call`
+- `tool_result_persist`
+
+`session_start` and `session_end` are kept for backwards compatibility with earlier Agent Space plugins.
 
 ### `api.registerCommand({ name, description?, execute })`
 

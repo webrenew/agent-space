@@ -17,6 +17,8 @@ export type AgentEventType =
   | 'test_pass' | 'test_fail' | 'build_pass' | 'build_fail' | 'error'
 
 export type PluginHookEvent =
+  | 'before_agent_start'
+  | 'agent_end'
   | 'session_start'
   | 'session_end'
   | 'message_received'
@@ -24,6 +26,7 @@ export type PluginHookEvent =
   | 'message_sent'
   | 'before_tool_call'
   | 'after_tool_call'
+  | 'tool_result_persist'
 
 export interface PluginHookBase {
   chatSessionId: string
@@ -32,18 +35,24 @@ export interface PluginHookBase {
   timestamp: number
 }
 
-export interface PluginSessionStartHook extends PluginHookBase {
+export interface PluginBeforeAgentStartHook extends PluginHookBase {
   promptPreview: string
+  promptLength: number
   yoloMode: boolean
   profileId: string
   profileSource: 'rule' | 'default' | 'fallback'
+  transformed: boolean
 }
 
-export interface PluginSessionEndHook extends PluginHookBase {
+export type PluginSessionStartHook = PluginBeforeAgentStartHook
+
+export interface PluginAgentEndHook extends PluginHookBase {
   status: 'success' | 'error' | 'stopped'
   durationMs: number
   rewardScore: number | null
 }
+
+export type PluginSessionEndHook = PluginAgentEndHook
 
 export interface PluginMessageReceivedHook extends PluginHookBase {
   message: string
@@ -78,7 +87,17 @@ export interface PluginAfterToolCallHook extends PluginHookBase {
   contentPreview: string
 }
 
+export interface PluginToolResultPersistHook extends PluginHookBase {
+  toolName: string | null
+  toolUseId: string
+  isError: boolean
+  contentPreview: string
+  contentLength: number
+}
+
 export interface PluginHookEventPayloadMap {
+  before_agent_start: PluginBeforeAgentStartHook
+  agent_end: PluginAgentEndHook
   session_start: PluginSessionStartHook
   session_end: PluginSessionEndHook
   message_received: PluginMessageReceivedHook
@@ -86,6 +105,7 @@ export interface PluginHookEventPayloadMap {
   message_sent: PluginMessageSentHook
   before_tool_call: PluginBeforeToolCallHook
   after_tool_call: PluginAfterToolCallHook
+  tool_result_persist: PluginToolResultPersistHook
 }
 
 export type PluginHookHandler<E extends PluginHookEvent = PluginHookEvent> =

@@ -225,6 +225,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const runRewardRecordedRef = useRef(false)
   const subagentSeatCounter = useRef(0)
   const activeSubagents = useRef<Map<string, string>>(new Map()) // toolUseId → subagentId
+  const activeToolNames = useRef<Map<string, string>>(new Map()) // toolUseId → toolName
 
   const addAgent = useAgentStore((s) => s.addAgent)
   const removeAgent = useAgentStore((s) => s.removeAgent)
@@ -359,6 +360,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       }
     }
     activeSubagents.current.clear()
+    activeToolNames.current.clear()
     for (const subId of subagentIds) {
       removeAgent(subId)
     }
@@ -473,7 +475,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       })
     }
 
-    void emitPluginHook('session_end', {
+    const agentEndPayload = {
       chatSessionId,
       workspaceDirectory: workspaceDirectory ?? workingDir ?? null,
       agentId,
@@ -481,7 +483,9 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       status,
       durationMs,
       rewardScore,
-    })
+    }
+    void emitPluginHook('session_end', agentEndPayload)
+    void emitPluginHook('agent_end', agentEndPayload)
   }, [addEvent, addReward, chatSession?.label, chatSessionId, workingDir])
 
   // Keep chat session directory synced to workspace until the first message.
@@ -662,6 +666,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
         case 'tool_use': {
           const data = event.data as { id: string; name: string; input: Record<string, unknown> }
           runToolCallCountRef.current += 1
+          activeToolNames.current.set(data.id, data.name)
           void emitPluginHook('before_tool_call', {
             chatSessionId,
             workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
@@ -748,6 +753,8 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
 
         case 'tool_result': {
           const data = event.data as { tool_use_id: string; content: string; is_error?: boolean }
+          const toolName = activeToolNames.current.get(data.tool_use_id) ?? null
+          activeToolNames.current.delete(data.tool_use_id)
           void emitPluginHook('after_tool_call', {
             chatSessionId,
             workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
@@ -756,6 +763,17 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
             toolUseId: data.tool_use_id,
             isError: data.is_error === true,
             contentPreview: truncateForHook(data.content, 240),
+          })
+          void emitPluginHook('tool_result_persist', {
+            chatSessionId,
+            workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
+            agentId,
+            timestamp: Date.now(),
+            toolName,
+            toolUseId: data.tool_use_id,
+            isError: data.is_error === true,
+            contentPreview: truncateForHook(data.content, 240),
+            contentLength: data.content.length,
           })
           setMessages((prev) => [
             ...prev,
@@ -1253,6 +1271,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       runFileWriteCountRef.current = 0
       runYoloModeRef.current = yoloMode
       runRewardRecordedRef.current = false
+      activeToolNames.current.clear()
 
       setChatContextSnapshot({
         chatSessionId,
@@ -1334,16 +1353,20 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
         output: currentAgent?.tokens_output ?? 0,
       }
       runModelBaselineRef.current = cloneTokensByModel(currentAgent?.sessionStats.tokensByModel ?? {})
-      void emitPluginHook('session_start', {
+      const beforeAgentStartPayload = {
         chatSessionId,
         workspaceDirectory: effectiveWorkingDir,
         agentId,
         timestamp: Date.now(),
-        promptPreview: truncateForHook(message, 240),
+        promptPreview: truncateForHook(promptForSend, 240),
+        promptLength: promptForSend.length,
         yoloMode,
         profileId: profileForRun.profile.id,
         profileSource: profileForRun.source,
-      })
+        transformed: promptTransformResult.transformed,
+      }
+      void emitPluginHook('session_start', beforeAgentStartPayload)
+      void emitPluginHook('before_agent_start', beforeAgentStartPayload)
       void emitPluginHook('message_sending', {
         chatSessionId,
         workspaceDirectory: effectiveWorkingDir,

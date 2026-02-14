@@ -37,6 +37,12 @@ function sanitizePayload<E extends PluginHookEvent>(
 }
 
 export function registerDiagnosticsHooks(registerHook: RegisterHookFn): void {
+  register(registerHook, 'before_agent_start', (payload) => {
+    logRendererEvent('info', 'plugin.hook.before_agent_start', sanitizePayload(payload))
+  })
+  register(registerHook, 'agent_end', (payload) => {
+    logRendererEvent('info', 'plugin.hook.agent_end', sanitizePayload(payload))
+  })
   register(registerHook, 'session_start', (payload) => {
     logRendererEvent('info', 'plugin.hook.session_start', sanitizePayload(payload))
   })
@@ -48,6 +54,9 @@ export function registerDiagnosticsHooks(registerHook: RegisterHookFn): void {
   })
   register(registerHook, 'after_tool_call', (payload) => {
     logRendererEvent('info', 'plugin.hook.after_tool_call', sanitizePayload(payload))
+  })
+  register(registerHook, 'tool_result_persist', (payload) => {
+    logRendererEvent('info', 'plugin.hook.tool_result_persist', sanitizePayload(payload))
   })
   register(registerHook, 'message_received', (payload) => {
     logRendererEvent('info', 'plugin.hook.message_received', sanitizePayload(payload))
