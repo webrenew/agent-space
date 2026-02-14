@@ -1,9 +1,18 @@
 import type { Scope } from '../types'
 
-function expandHome(dir: string): string {
+function inferHomeFromCwd(cwd: string): string | null {
+  const usersMatch = cwd.match(/^\/Users\/[^/]+/)
+  if (usersMatch) return usersMatch[0]
+
+  const homeMatch = cwd.match(/^\/home\/[^/]+/)
+  if (homeMatch) return homeMatch[0]
+
+  return null
+}
+
+function expandHome(dir: string, cwd: string): string {
   if (dir.startsWith('~/') || dir === '~') {
-    // In Electron renderer, HOME env var or /Users/<user> from cwd
-    const home = typeof process !== 'undefined' ? process.env.HOME ?? '' : ''
+    const home = inferHomeFromCwd(cwd) ?? ''
     if (home) return dir.replace('~', home)
   }
   return dir
@@ -22,7 +31,7 @@ export function matchScope(cwd: string, scopes: Scope[]): Scope | null {
 
   for (const scope of scopes) {
     for (const dir of scope.directories) {
-      const expanded = normalizePath(expandHome(dir))
+      const expanded = normalizePath(expandHome(dir, cwd))
       if (normalizedCwd.startsWith(expanded)) {
         return scope
       }

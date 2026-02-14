@@ -27,6 +27,7 @@ export function useLspBridge(
   // Start LSP server when language changes
   useEffect(() => {
     if (!filePath || languageId === 'plaintext') return
+    const activeFilePath = filePath
 
     let cancelled = false
 
@@ -68,7 +69,7 @@ export function useLspBridge(
                 publishDiagnostics: { relatedInformation: true },
               },
             },
-            rootUri: `file://${filePath.split('/').slice(0, -1).join('/')}`,
+            rootUri: `file://${activeFilePath.split('/').slice(0, -1).join('/')}`,
           },
         }
         await window.electronAPI.lsp.send(result.serverId, initMsg)
@@ -82,14 +83,14 @@ export function useLspBridge(
             params: {},
           })
 
-          if (filePath && editorRef.current) {
+          if (editorRef.current) {
             versionRef.current = 1
             await window.electronAPI.lsp.send(serverIdRef.current, {
               jsonrpc: '2.0',
               method: 'textDocument/didOpen',
               params: {
                 textDocument: {
-                  uri: `file://${filePath}`,
+                  uri: `file://${activeFilePath}`,
                   languageId,
                   version: versionRef.current,
                   text: editorRef.current.getValue(),
@@ -107,11 +108,11 @@ export function useLspBridge(
 
     return () => {
       cancelled = true
-      if (serverIdRef.current && filePath) {
+      if (serverIdRef.current) {
         void window.electronAPI.lsp.send(serverIdRef.current, {
           jsonrpc: '2.0',
           method: 'textDocument/didClose',
-          params: { textDocument: { uri: `file://${filePath}` } },
+          params: { textDocument: { uri: `file://${activeFilePath}` } },
         }).catch(() => { /* ignore shutdown errors */ })
       }
     }

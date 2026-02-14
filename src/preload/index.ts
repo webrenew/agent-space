@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ElectronAPI } from '../shared/electron-api'
 
-contextBridge.exposeInMainWorld('electronAPI', {
+const electronAPI: ElectronAPI = {
   versions: {
     node: process.versions.node,
     chrome: process.versions.chrome,
@@ -50,7 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
 
-    set: (settings: unknown) => ipcRenderer.invoke('settings:set', settings),
+    set: (settings) => ipcRenderer.invoke('settings:set', settings),
 
     selectDirectory: () => ipcRenderer.invoke('settings:selectDirectory'),
 
@@ -164,8 +165,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         name: string; languages: string[]; active: boolean
       }>>,
 
-    onMessage: (callback: (data: { serverId: string; message: unknown }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: { serverId: string; message: unknown }): void => {
+    onMessage: (callback) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { serverId: string; message: unknown }
+      ): void => {
         callback(data)
       }
       ipcRenderer.on('lsp:message', handler)
@@ -173,21 +177,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   claude: {
-    start: (options: { prompt: string; model?: string; systemPrompt?: string; allowedTools?: string[]; workingDirectory?: string; dangerouslySkipPermissions?: boolean }) =>
+    start: (options) =>
       ipcRenderer.invoke('claude:start', options) as Promise<{ sessionId: string }>,
 
     stop: (sessionId: string) =>
       ipcRenderer.invoke('claude:stop', sessionId) as Promise<void>,
 
-    onEvent: (callback: (event: {
-      sessionId: string
-      type: string
-      data: Record<string, unknown>
-    }) => void) => {
+    onEvent: (callback) => {
       const handler = (
         _event: Electron.IpcRendererEvent,
-        claudeEvent: { sessionId: string; type: string; data: Record<string, unknown> }
-      ) => callback(claudeEvent)
+        claudeEvent: unknown
+      ) => callback(claudeEvent as Parameters<typeof callback>[0])
       ipcRenderer.on('claude:event', handler)
       return () => { ipcRenderer.removeListener('claude:event', handler) }
     }
@@ -208,13 +208,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
   memories: {
-    addChatMessage: (opts: {
-      content: string
-      role: string
-      scopeId: string
-      scopeName: string
-      workspacePath: string
-    }) => ipcRenderer.invoke('memories:addChatMessage', opts) as Promise<void>,
+    addChatMessage: (opts) => ipcRenderer.invoke('memories:addChatMessage', opts) as Promise<void>,
 
     getChatHistory: (scopeId: string, limit?: number) =>
       ipcRenderer.invoke('memories:getChatHistory', scopeId, limit) as Promise<Array<{
@@ -224,4 +218,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     isReady: () =>
       ipcRenderer.invoke('memories:isReady') as Promise<boolean>,
   }
-})
+}
+
+contextBridge.exposeInMainWorld('electronAPI', electronAPI)

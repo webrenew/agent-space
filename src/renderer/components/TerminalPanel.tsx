@@ -20,6 +20,7 @@ let terminalCounter = 0
 preloadSounds()
 
 export function TerminalPanel() {
+  const LEGACY_CHAT_SESSION_ID = 'terminal-panel-chat'
   const terminals = useAgentStore((s) => s.terminals)
   const activeTerminalId = useAgentStore((s) => s.activeTerminalId)
   const setActiveTerminal = useAgentStore((s) => s.setActiveTerminal)
@@ -321,7 +322,7 @@ export function TerminalPanel() {
               className="hover-row"
               style={{ width: '100%', padding: '6px 12px', fontSize: 12, textAlign: 'left', color: '#9A9692', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 8 }}
             >
-              <span style={{ width: 7, height: 7, borderRadius: '50%' }} style={{ backgroundColor: scope.color }} />
+              <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: scope.color }} />
               {scope.name}
             </button>
           ))}
@@ -331,7 +332,7 @@ export function TerminalPanel() {
       {/* Content area */}
       <div className="flex-1 relative overflow-hidden">
         {activeView === 'chat' ? (
-          <ChatPanel />
+          <ChatPanel chatSessionId={LEGACY_CHAT_SESSION_ID} />
         ) : activeView === 'events' ? (
           <EventLog />
         ) : activeView === 'observability' ? (
