@@ -78,11 +78,14 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   )
 
   const workspaceRoot = useWorkspaceStore((s) => s.rootPath)
+  const recentFolders = useWorkspaceStore((s) => s.recentFolders)
   const scopes = useSettingsStore((s) => s.settings.scopes)
   const yoloMode = useSettingsStore((s) => s.settings.yoloMode)
   const loadHistory = useChatHistoryStore((s) => s.loadHistory)
   const getHistory = useChatHistoryStore((s) => s.getHistory)
   const isHistoryLoaded = useChatHistoryStore((s) => s.isLoaded)
+  const [showRecentMenu, setShowRecentMenu] = useState(false)
+  const recentMenuRef = useRef<HTMLDivElement>(null)
 
   const workingDir = chatSession ? chatSession.workingDirectory : fallbackWorkingDir
   const isDirectoryCustom = chatSession ? chatSession.directoryMode === 'custom' : false
@@ -92,6 +95,17 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const currentScope = workingDir ? matchScope(workingDir, scopes) : null
   const scopeId = currentScope?.id ?? 'default'
   const scopeName = currentScope?.name ?? 'default'
+
+  useEffect(() => {
+    if (!showRecentMenu) return
+    const onDocMouseDown = (event: MouseEvent) => {
+      if (recentMenuRef.current && !recentMenuRef.current.contains(event.target as Node)) {
+        setShowRecentMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    return () => document.removeEventListener('mousedown', onDocMouseDown)
+  }, [showRecentMenu])
 
   // Load chat history from memories on mount / scope change
   useEffect(() => {
@@ -172,7 +186,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       if (chatSession) {
         updateChatSession(chatSessionId, {
           workingDirectory: selected,
-          directoryMode: 'custom',
+          directoryMode: selected === workspaceRoot ? 'workspace' : 'custom',
         })
       } else {
         setFallbackWorkingDir(selected)
@@ -180,7 +194,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
     } catch (err) {
       console.error('[ChatPanel] Failed to change working directory:', err)
     }
-  }, [chatSession, chatSessionId, updateChatSession])
+  }, [chatSession, chatSessionId, updateChatSession, workspaceRoot])
 
   const handleSyncToWorkspace = useCallback(() => {
     if (chatSession) {
@@ -192,6 +206,23 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
     }
     setFallbackWorkingDir(workspaceRoot ?? null)
   }, [chatSession, chatSessionId, updateChatSession, workspaceRoot])
+
+  const handleSelectRecentDirectory = useCallback(
+    (path: string) => {
+      if (path === workspaceRoot) {
+        handleSyncToWorkspace()
+      } else if (chatSession) {
+        updateChatSession(chatSessionId, {
+          workingDirectory: path,
+          directoryMode: 'custom',
+        })
+      } else {
+        setFallbackWorkingDir(path)
+      }
+      setShowRecentMenu(false)
+    },
+    [chatSession, chatSessionId, handleSyncToWorkspace, updateChatSession, workspaceRoot]
+  )
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -644,6 +675,9 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const cwdLabel = workingDir
     ? workingDir.split('/').pop() ?? workingDir
     : 'No folder selected'
+  const modeLabel = isDirectoryCustom ? 'custom' : 'workspace'
+  const modeLetter = isDirectoryCustom ? 'C' : 'W'
+  const recentDirectoryOptions = recentFolders.filter((path) => path !== workingDir).slice(0, 8)
   const showSyncToWorkspace = Boolean(
     workspaceRoot && (workingDir !== workspaceRoot || isDirectoryCustom)
   )
@@ -657,6 +691,42 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
         flexShrink: 0, minHeight: 26,
       }}>
         <span style={{ color: '#595653' }}>$</span>
+        <span
+          title={`Directory mode: ${modeLabel}`}
+          style={{
+            minWidth: 14,
+            height: 14,
+            borderRadius: 3,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: 0.3,
+            border: `1px solid ${isDirectoryCustom ? 'rgba(200,120,48,0.5)' : 'rgba(84,140,90,0.5)'}`,
+            color: isDirectoryCustom ? '#c87830' : '#548C5A',
+            background: isDirectoryCustom ? 'rgba(200,120,48,0.1)' : 'rgba(84,140,90,0.1)',
+          }}
+        >
+          {modeLetter}
+        </span>
+        <span
+          title={`Scope: ${scopeName}`}
+          style={{
+            padding: '1px 6px',
+            borderRadius: 999,
+            border: '1px solid rgba(116,116,124,0.35)',
+            color: '#9A9692',
+            fontSize: 10,
+            fontWeight: 600,
+            maxWidth: 120,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {scopeName}
+        </span>
         <span
           title={workingDir ?? 'No working directory selected'}
           style={{
@@ -678,6 +748,103 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
             sync
           </button>
         )}
+        <div ref={recentMenuRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowRecentMenu((prev) => !prev)}
+            title={recentDirectoryOptions.length > 0 ? 'Switch chat scope from recent folders' : 'No recent folders'}
+            disabled={recentDirectoryOptions.length === 0 && !workspaceRoot}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: recentDirectoryOptions.length > 0 || workspaceRoot ? '#595653' : '#3f3e3c',
+              cursor: recentDirectoryOptions.length > 0 || workspaceRoot ? 'pointer' : 'default',
+              fontFamily: 'inherit',
+              fontSize: 11,
+              padding: '0 4px',
+            }}
+          >
+            recent
+          </button>
+          {showRecentMenu && (
+            <div
+              className="glass-panel"
+              style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: 4,
+                minWidth: 240,
+                maxWidth: 360,
+                borderRadius: 8,
+                padding: '4px 0',
+                zIndex: 30,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+              }}
+            >
+              {workspaceRoot && (
+                <button
+                  onClick={() => {
+                    handleSyncToWorkspace()
+                    setShowRecentMenu(false)
+                  }}
+                  className="hover-row"
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '6px 10px',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#9A9692',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                  title={workspaceRoot}
+                >
+                  <span style={{ color: '#548C5A', fontWeight: 700 }}>W</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {workspaceRoot}
+                  </span>
+                </button>
+              )}
+              {recentDirectoryOptions.map((path) => (
+                <button
+                  key={path}
+                  onClick={() => handleSelectRecentDirectory(path)}
+                  className="hover-row"
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '6px 10px',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#9A9692',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                  title={path}
+                >
+                  <span style={{ color: '#c87830', fontWeight: 700 }}>C</span>
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {path}
+                  </span>
+                </button>
+              ))}
+              {!workspaceRoot && recentDirectoryOptions.length === 0 && (
+                <div style={{ padding: '6px 10px', color: '#595653', fontSize: 11 }}>
+                  No recent folders yet
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         <button
           onClick={() => void handleChangeWorkingDir()}
           title="Pick folder for this chat"

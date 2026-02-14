@@ -31,7 +31,7 @@ Last updated: 2026-02-14
     - lazy-mount heavy panels
     - reduce initial renderer payload
 
-- [ ] **Stronger project scoping UX in chat**
+- [x] **Stronger project scoping UX in chat**
   - Goal: easier multi-project workflows.
   - Add:
     - quick folder switch from recents

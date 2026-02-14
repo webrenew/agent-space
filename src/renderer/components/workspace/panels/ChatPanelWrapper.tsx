@@ -18,19 +18,30 @@ export function ChatPanelWrapper() {
   const removeAgent = useAgentStore((s) => s.removeAgent)
   const workspaceRoot = useWorkspaceStore((s) => s.rootPath)
   const autoCreated = useRef(false)
+  const activeSession = chatSessions.find((s) => s.id === activeChatSessionId) ?? null
 
-  const handleCreateSession = useCallback(() => {
+  const createSession = useCallback((workingDirectory: string | null, directoryMode: 'workspace' | 'custom') => {
     const id = `chat-session-${++chatSessionCounter}-${Date.now()}`
     const session: ChatSessionInfo = {
       id,
       label: `Chat ${chatSessionCounter}`,
       agentId: null,
       scopeId: null,
-      workingDirectory: workspaceRoot,
-      directoryMode: 'workspace',
+      workingDirectory,
+      directoryMode,
     }
     addChatSession(session)
-  }, [addChatSession, workspaceRoot])
+  }, [addChatSession])
+
+  const handleCreateSession = useCallback(() => {
+    const baseDirectory = activeSession?.workingDirectory ?? workspaceRoot ?? null
+    const baseMode = activeSession?.directoryMode ?? 'workspace'
+    createSession(baseDirectory, baseMode)
+  }, [activeSession, createSession, workspaceRoot])
+
+  const handleCreateWorkspaceSession = useCallback(() => {
+    createSession(workspaceRoot ?? null, 'workspace')
+  }, [createSession, workspaceRoot])
 
   // Auto-create a chat session on mount if none exist
   useEffect(() => {
@@ -72,6 +83,9 @@ export function ChatPanelWrapper() {
           const isActiveTab = activeChatSessionId === session.id
           const isCustomDirectory = session.directoryMode === 'custom'
           const modeLabel = isCustomDirectory ? 'custom' : 'workspace'
+          const sessionDirLabel = session.workingDirectory
+            ? session.workingDirectory.split('/').pop() ?? session.workingDirectory
+            : 'no-dir'
           return (
             <button
               key={session.id}
@@ -95,6 +109,19 @@ export function ChatPanelWrapper() {
               />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 80 }}>
                 {session.label}
+              </span>
+              <span
+                title={session.workingDirectory ?? 'No working directory selected'}
+                style={{
+                  maxWidth: 72,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: 10,
+                  color: '#74747C',
+                }}
+              >
+                {sessionDirLabel}
               </span>
               <span
                 title={`Directory mode: ${modeLabel}`}
@@ -144,6 +171,25 @@ export function ChatPanelWrapper() {
           )
         })}
 
+        <button
+          onClick={handleCreateWorkspaceSession}
+          className="nav-item"
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 30, height: 24,
+            color: workspaceRoot ? '#548C5A' : '#595653',
+            borderRadius: 4,
+            fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
+            background: workspaceRoot ? 'rgba(84,140,90,0.1)' : 'transparent',
+            border: workspaceRoot ? '1px solid rgba(84,140,90,0.35)' : '1px solid transparent',
+            cursor: 'pointer', fontFamily: 'inherit',
+            transition: 'all 0.15s ease',
+          }}
+          title={workspaceRoot ? 'New Chat in current workspace' : 'New Chat in workspace mode'}
+        >
+          W+
+        </button>
+
         {/* New chat session button */}
         <button
           onClick={handleCreateSession}
@@ -155,7 +201,7 @@ export function ChatPanelWrapper() {
             border: 'none', cursor: 'pointer', fontFamily: 'inherit',
             transition: 'color 0.15s ease',
           }}
-          title="New Chat"
+          title="New Chat (same scope as active tab)"
         >
           +
         </button>
