@@ -147,6 +147,8 @@ export type SystemSound =
 
 export type SchedulerRunStatus = 'idle' | 'running' | 'success' | 'error'
 export type SchedulerRunTrigger = 'cron' | 'manual'
+export type TodoRunnerRunStatus = 'idle' | 'running' | 'success' | 'error'
+export type TodoRunnerRunTrigger = 'auto' | 'manual'
 
 export type ClaudeSettingSource = 'user' | 'project' | 'local'
 export type ClaudePermissionMode =
@@ -243,6 +245,42 @@ export interface SchedulerTask {
   lastError: string | null
   lastDurationMs: number | null
   lastRunTrigger: SchedulerRunTrigger | null
+}
+
+export interface TodoRunnerJobInput {
+  id?: string
+  name: string
+  prompt: string
+  workingDirectory: string
+  runnerCommand: string
+  enabled: boolean
+  yoloMode: boolean
+  todoItems: string[]
+}
+
+export interface TodoRunnerJob {
+  id: string
+  name: string
+  prompt: string
+  workingDirectory: string
+  runnerCommand: string
+  enabled: boolean
+  yoloMode: boolean
+  todoItems: string[]
+  createdAt: number
+  updatedAt: number
+  isRunning: boolean
+  lastRunAt: number | null
+  lastStatus: TodoRunnerRunStatus
+  lastError: string | null
+  lastDurationMs: number | null
+  lastRunTrigger: TodoRunnerRunTrigger | null
+  totalTodos: number
+  completedTodos: number
+  failedTodos: number
+  blockedTodos: number
+  currentTodoIndex: number | null
+  nextTodoText: string | null
 }
 
 export interface Scope {

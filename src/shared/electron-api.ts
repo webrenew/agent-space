@@ -5,6 +5,8 @@ import type {
   WorkspaceContextSnapshot,
   SchedulerTask,
   SchedulerTaskInput,
+  TodoRunnerJob,
+  TodoRunnerJobInput,
 } from '../renderer/types'
 
 export type Unsubscribe = () => void
@@ -157,6 +159,15 @@ export interface ElectronAPI {
     upsert: (task: SchedulerTaskInput) => Promise<SchedulerTask>
     delete: (taskId: string) => Promise<void>
     runNow: (taskId: string) => Promise<SchedulerTask>
+    onUpdated: (callback: () => void) => Unsubscribe
+  }
+  todoRunner: {
+    list: () => Promise<TodoRunnerJob[]>
+    upsert: (job: TodoRunnerJobInput) => Promise<TodoRunnerJob>
+    delete: (jobId: string) => Promise<void>
+    start: (jobId: string) => Promise<TodoRunnerJob>
+    pause: (jobId: string) => Promise<TodoRunnerJob>
+    reset: (jobId: string) => Promise<TodoRunnerJob>
     onUpdated: (callback: () => void) => Unsubscribe
   }
 }

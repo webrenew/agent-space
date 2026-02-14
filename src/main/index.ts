@@ -8,6 +8,7 @@ import { setupLspHandlers, cleanupLspServers } from './lsp-manager'
 import { setupMemoriesHandlers, cleanupMemories } from './memories'
 import { setupAgentNamerHandlers } from './agent-namer'
 import { setupSchedulerHandlers, cleanupScheduler } from './scheduler'
+import { setupTodoRunnerHandlers, cleanupTodoRunner } from './todo-runner'
 import { setupWorkspaceContextHandlers } from './workspace-context'
 import {
   addStartupBreadcrumb,
@@ -307,6 +308,7 @@ if (!gotTheLock) {
     runStartupStep('memories_handlers', () => setupMemoriesHandlers())
     runStartupStep('agent_namer_handlers', () => setupAgentNamerHandlers(mainWindow!))
     runStartupStep('scheduler_handlers', () => setupSchedulerHandlers())
+    runStartupStep('todo_runner_handlers', () => setupTodoRunnerHandlers())
     runStartupStep('menu', () => createApplicationMenu(mainWindow!))
     runStartupStep('chat_popout_handler', () => setupChatPopoutHandler())
 
@@ -387,6 +389,7 @@ if (!gotTheLock) {
     cleanupLspServers()
     cleanupMemories().catch(() => {})
     cleanupScheduler()
+    cleanupTodoRunner()
   })
 
   app.on('window-all-closed', () => {

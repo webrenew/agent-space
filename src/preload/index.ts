@@ -267,6 +267,31 @@ const electronAPI: ElectronAPI = {
       return () => { ipcRenderer.removeListener('scheduler:updated', handler) }
     },
   },
+  todoRunner: {
+    list: () =>
+      ipcRenderer.invoke('todoRunner:list'),
+
+    upsert: (job) =>
+      ipcRenderer.invoke('todoRunner:upsert', job),
+
+    delete: (jobId: string) =>
+      ipcRenderer.invoke('todoRunner:delete', jobId) as Promise<void>,
+
+    start: (jobId: string) =>
+      ipcRenderer.invoke('todoRunner:start', jobId),
+
+    pause: (jobId: string) =>
+      ipcRenderer.invoke('todoRunner:pause', jobId),
+
+    reset: (jobId: string) =>
+      ipcRenderer.invoke('todoRunner:reset', jobId),
+
+    onUpdated: (callback: () => void) => {
+      const handler = () => callback()
+      ipcRenderer.on('todoRunner:updated', handler)
+      return () => { ipcRenderer.removeListener('todoRunner:updated', handler) }
+    },
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
