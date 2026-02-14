@@ -14,8 +14,8 @@ permissions:
   contents: read
 
 jobs:
-  checks:
-    name: Typecheck and Build
+  desktop-checks:
+    name: Desktop Lint, Typecheck, Build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,17 +36,54 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Desktop lint
+        run: pnpm run lint
+
       - name: Typecheck
         run: pnpm exec tsc -b
 
-      - name: Build
+      - name: Desktop build
         run: pnpm build
 
       - name: Audit dependencies (high+)
         run: pnpm audit --audit-level=high
 
+  frontend-checks:
+    name: Frontend Lint, Typecheck, Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend lint
+        run: pnpm -C web run lint
+
+      - name: Frontend typecheck
+        run: pnpm -C web exec tsc --noEmit
+
+      - name: Frontend build
+        run: pnpm -C web run build
+
   smoke-desktop:
     name: Desktop Smoke (Electron)
+    needs:
+      - desktop-checks
+      - frontend-checks
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
