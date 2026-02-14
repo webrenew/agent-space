@@ -4,6 +4,7 @@ import { createInterface, Interface as ReadlineInterface } from 'readline'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
+import { resolveClaudeProfileForDirectory } from './claude-profile'
 
 // ── Types (mirrored from renderer, kept lightweight for main process) ──
 
@@ -330,12 +331,6 @@ function startSession(options: ClaudeSessionOptions): string {
     args.push('--dangerously-skip-permissions')
   }
 
-  // Sanitize prompt — strip null bytes to prevent spawn errors
-  const safePrompt = options.prompt.replace(/\0/g, '')
-
-  // Pass prompt as CLI argument
-  args.push('--', safePrompt)
-
   // Validate and resolve working directory
   const home = process.env.HOME ?? process.cwd()
   const rawCwd = options.workingDirectory ?? home
@@ -352,6 +347,25 @@ function startSession(options: ClaudeSessionOptions): string {
     console.error(`[claude-session] Invalid working directory: ${message}`)
     throw new Error(`Invalid working directory: ${message}`)
   }
+
+  const profileResolution = resolveClaudeProfileForDirectory(cwd)
+  if (profileResolution.cliArgs.length > 0) {
+    args.push(...profileResolution.cliArgs)
+  }
+  console.log(
+    `[claude-session] Profile "${profileResolution.profile.id}" (${profileResolution.source}) for cwd: ${cwd}`
+  )
+  if (profileResolution.missingPathWarnings.length > 0) {
+    for (const warning of profileResolution.missingPathWarnings) {
+      console.warn(`[claude-session] ${warning}`)
+    }
+  }
+
+  // Sanitize prompt — strip null bytes to prevent spawn errors
+  const safePrompt = options.prompt.replace(/\0/g, '')
+
+  // Pass prompt as CLI argument after all flags.
+  args.push('--', safePrompt)
 
   let proc: ChildProcess
   try {

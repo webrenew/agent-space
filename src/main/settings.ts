@@ -44,6 +44,23 @@ const DEFAULT_SETTINGS: AppSettings = {
   telemetry: {
     enabled: false,
   },
+  claudeProfiles: {
+    defaultProfileId: 'default',
+    profiles: [
+      {
+        id: 'default',
+        name: 'Default',
+        settingsPath: '',
+        mcpConfigPath: '',
+        pluginDirs: [],
+        settingSources: ['user', 'project', 'local'],
+        agent: '',
+        permissionMode: 'default',
+        strictMcpConfig: false,
+      },
+    ],
+    workspaceRules: [],
+  },
 }
 
 const SETTINGS_DIR = path.join(os.homedir(), '.agent-space')

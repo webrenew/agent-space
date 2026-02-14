@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import { useSettingsStore, saveSettings } from '../store/settings'
 import type {
   AppSettings,
+  ClaudePermissionMode,
+  ClaudeProfile,
+  ClaudeSettingSource,
+  ClaudeWorkspaceProfileRule,
   CursorStyle,
   SchedulerTask,
   SchedulerTaskInput,
@@ -57,6 +61,15 @@ const SCOPE_COLOR_PRESETS = [
 type SchedulerTaskDraft = SchedulerTask & { isDraft?: boolean }
 
 const DEFAULT_CRON_EXAMPLES = ['*/15 * * * *', '0 * * * *', '0 9 * * 1-5', '30 18 * * *']
+const CLAUDE_SETTING_SOURCE_OPTIONS: ClaudeSettingSource[] = ['user', 'project', 'local']
+const CLAUDE_PERMISSION_MODE_OPTIONS: ClaudePermissionMode[] = [
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'delegate',
+  'dontAsk',
+  'plan',
+]
 
 function formatDateTime(timestamp: number | null): string {
   if (!timestamp) return 'Never'
@@ -73,6 +86,13 @@ function formatDuration(durationMs: number | null): string {
   const hours = Math.floor(minutes / 60)
   const remainderMinutes = minutes % 60
   return `${hours}h ${remainderMinutes}m`
+}
+
+function parseCsv(value: string): string[] {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
 }
 
 function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
@@ -249,6 +269,119 @@ export function SettingsPanel() {
     },
     []
   )
+
+  const updateClaudeProfile = useCallback((profileId: string, updates: Partial<ClaudeProfile>) => {
+    setDraft((d) => ({
+      ...d,
+      claudeProfiles: {
+        ...d.claudeProfiles,
+        profiles: d.claudeProfiles.profiles.map((profile) =>
+          profile.id === profileId ? { ...profile, ...updates } : profile
+        ),
+      },
+    }))
+  }, [])
+
+  const toggleClaudeProfileSettingSource = useCallback((profileId: string, source: ClaudeSettingSource) => {
+    setDraft((d) => ({
+      ...d,
+      claudeProfiles: {
+        ...d.claudeProfiles,
+        profiles: d.claudeProfiles.profiles.map((profile) => {
+          if (profile.id !== profileId) return profile
+          const hasSource = profile.settingSources.includes(source)
+          const nextSources = hasSource
+            ? profile.settingSources.filter((entry) => entry !== source)
+            : [...profile.settingSources, source]
+          return {
+            ...profile,
+            settingSources: nextSources.length > 0 ? nextSources : ['user', 'project', 'local'],
+          }
+        }),
+      },
+    }))
+  }, [])
+
+  const addClaudeProfile = useCallback(() => {
+    const id = `profile-${Date.now()}`
+    const profile: ClaudeProfile = {
+      id,
+      name: `Profile ${draft.claudeProfiles.profiles.length + 1}`,
+      settingsPath: '',
+      mcpConfigPath: '',
+      pluginDirs: [],
+      settingSources: ['user', 'project', 'local'],
+      agent: '',
+      permissionMode: 'default',
+      strictMcpConfig: false,
+    }
+    setDraft((d) => ({
+      ...d,
+      claudeProfiles: {
+        ...d.claudeProfiles,
+        profiles: [...d.claudeProfiles.profiles, profile],
+      },
+    }))
+  }, [draft.claudeProfiles.profiles.length])
+
+  const removeClaudeProfile = useCallback((profileId: string) => {
+    setDraft((d) => {
+      if (d.claudeProfiles.profiles.length <= 1) return d
+      const profiles = d.claudeProfiles.profiles.filter((profile) => profile.id !== profileId)
+      const defaultProfileId = d.claudeProfiles.defaultProfileId === profileId
+        ? (profiles[0]?.id ?? 'default')
+        : d.claudeProfiles.defaultProfileId
+      const workspaceRules = d.claudeProfiles.workspaceRules.filter((rule) => rule.profileId !== profileId)
+      return {
+        ...d,
+        claudeProfiles: {
+          ...d.claudeProfiles,
+          profiles,
+          defaultProfileId,
+          workspaceRules,
+        },
+      }
+    })
+  }, [])
+
+  const addClaudeWorkspaceRule = useCallback(() => {
+    const firstProfile = draft.claudeProfiles.profiles[0]
+    if (!firstProfile) return
+    const rule: ClaudeWorkspaceProfileRule = {
+      id: `rule-${Date.now()}`,
+      pathPrefix: '',
+      profileId: firstProfile.id,
+    }
+    setDraft((d) => ({
+      ...d,
+      claudeProfiles: {
+        ...d.claudeProfiles,
+        workspaceRules: [...d.claudeProfiles.workspaceRules, rule],
+      },
+    }))
+  }, [draft.claudeProfiles.profiles])
+
+  const updateClaudeWorkspaceRule = useCallback((ruleId: string, updates: Partial<ClaudeWorkspaceProfileRule>) => {
+    setDraft((d) => ({
+      ...d,
+      claudeProfiles: {
+        ...d.claudeProfiles,
+        workspaceRules: d.claudeProfiles.workspaceRules.map((rule) =>
+          rule.id === ruleId ? { ...rule, ...updates } : rule
+        ),
+      },
+    }))
+  }, [])
+
+  const removeClaudeWorkspaceRule = useCallback((ruleId: string) => {
+    setDraft((d) => ({
+      ...d,
+      claudeProfiles: {
+        ...d.claudeProfiles,
+        workspaceRules: d.claudeProfiles.workspaceRules.filter((rule) => rule.id !== ruleId),
+      },
+    }))
+  }, [])
 
   const updateScheduleDraft = useCallback((taskId: string, updates: Partial<SchedulerTaskDraft>) => {
     setScheduleDrafts((prev) => prev.map((task) => (task.id === taskId ? { ...task, ...updates } : task)))
@@ -526,6 +659,300 @@ export function SettingsPanel() {
                 <div style={{ fontSize: 11, color: '#595653', lineHeight: 1.5 }}>
                   Stores local crash and startup diagnostics in <code>~/.agent-space/telemetry.ndjson</code>.
                 </div>
+              </Section>
+              <Section title="CLAUDE PROFILES">
+                <Row label="Default profile">
+                  <Select
+                    value={draft.claudeProfiles.defaultProfileId}
+                    options={draft.claudeProfiles.profiles.map((profile) => profile.id)}
+                    labels={Object.fromEntries(
+                      draft.claudeProfiles.profiles.map((profile) => [profile.id, profile.name || profile.id])
+                    )}
+                    onChange={(value) =>
+                      setDraft((d) => ({
+                        ...d,
+                        claudeProfiles: {
+                          ...d.claudeProfiles,
+                          defaultProfileId: value,
+                        },
+                      }))
+                    }
+                  />
+                </Row>
+
+                <div style={{ fontSize: 11, color: '#595653', lineHeight: 1.5, marginBottom: 8 }}>
+                  Profiles let you isolate Claude settings, MCP config, and plugin dirs per workspace.
+                </div>
+
+                {draft.claudeProfiles.profiles.map((profile) => (
+                  <div
+                    key={profile.id}
+                    style={{
+                      border: '1px solid rgba(89,86,83,0.25)',
+                      borderRadius: 8,
+                      padding: 10,
+                      marginBottom: 10,
+                      background: 'rgba(14,14,13,0.35)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <span style={{ fontSize: 12, color: '#74747C' }}>{profile.id}</span>
+                        <input
+                          type="text"
+                          value={profile.name}
+                          onChange={(e) => updateClaudeProfile(profile.id, { name: e.target.value })}
+                          placeholder="Profile name"
+                          style={{
+                            width: 180,
+                            background: 'rgba(89,86,83,0.15)',
+                            border: '1px solid rgba(89,86,83,0.3)',
+                            borderRadius: 6,
+                            padding: '5px 8px',
+                            fontSize: 13,
+                            color: '#9A9692',
+                            outline: 'none',
+                            fontFamily: 'inherit',
+                          }}
+                        />
+                      </div>
+                      <button
+                        onClick={() => removeClaudeProfile(profile.id)}
+                        disabled={draft.claudeProfiles.profiles.length <= 1}
+                        style={{
+                          padding: '5px 10px',
+                          fontSize: 12,
+                          fontWeight: 500,
+                          background: 'rgba(196,80,80,0.12)',
+                          border: '1px solid rgba(196,80,80,0.32)',
+                          borderRadius: 6,
+                          color: '#c45050',
+                          cursor: draft.claudeProfiles.profiles.length <= 1 ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                          opacity: draft.claudeProfiles.profiles.length <= 1 ? 0.45 : 1,
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+
+                    <Row label="Settings file">
+                      <input
+                        type="text"
+                        value={profile.settingsPath}
+                        onChange={(e) => updateClaudeProfile(profile.id, { settingsPath: e.target.value })}
+                        placeholder="~/.agent-space/claude-profiles/work/settings.json"
+                        style={{
+                          width: 320,
+                          background: 'rgba(89,86,83,0.15)',
+                          border: '1px solid rgba(89,86,83,0.3)',
+                          borderRadius: 6,
+                          padding: '5px 8px',
+                          fontSize: 12,
+                          color: '#9A9692',
+                          outline: 'none',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    </Row>
+
+                    <Row label="MCP config">
+                      <input
+                        type="text"
+                        value={profile.mcpConfigPath}
+                        onChange={(e) => updateClaudeProfile(profile.id, { mcpConfigPath: e.target.value })}
+                        placeholder="~/.agent-space/claude-profiles/work/mcp.json"
+                        style={{
+                          width: 320,
+                          background: 'rgba(89,86,83,0.15)',
+                          border: '1px solid rgba(89,86,83,0.3)',
+                          borderRadius: 6,
+                          padding: '5px 8px',
+                          fontSize: 12,
+                          color: '#9A9692',
+                          outline: 'none',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    </Row>
+
+                    <Row label="Plugin dirs (csv)">
+                      <input
+                        type="text"
+                        value={profile.pluginDirs.join(', ')}
+                        onChange={(e) => updateClaudeProfile(profile.id, { pluginDirs: parseCsv(e.target.value) })}
+                        placeholder="~/profile/plugins, /path/to/other/plugins"
+                        style={{
+                          width: 320,
+                          background: 'rgba(89,86,83,0.15)',
+                          border: '1px solid rgba(89,86,83,0.3)',
+                          borderRadius: 6,
+                          padding: '5px 8px',
+                          fontSize: 12,
+                          color: '#9A9692',
+                          outline: 'none',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    </Row>
+
+                    <Row label="Agent alias">
+                      <input
+                        type="text"
+                        value={profile.agent}
+                        onChange={(e) => updateClaudeProfile(profile.id, { agent: e.target.value })}
+                        placeholder="reviewer"
+                        style={{
+                          width: 160,
+                          background: 'rgba(89,86,83,0.15)',
+                          border: '1px solid rgba(89,86,83,0.3)',
+                          borderRadius: 6,
+                          padding: '5px 8px',
+                          fontSize: 12,
+                          color: '#9A9692',
+                          outline: 'none',
+                          fontFamily: 'inherit',
+                        }}
+                      />
+                    </Row>
+
+                    <Row label="Permission mode">
+                      <Select
+                        value={profile.permissionMode}
+                        options={CLAUDE_PERMISSION_MODE_OPTIONS}
+                        onChange={(value) => updateClaudeProfile(profile.id, { permissionMode: value as ClaudePermissionMode })}
+                      />
+                    </Row>
+
+                    <Row label="Strict MCP config">
+                      <Toggle
+                        checked={profile.strictMcpConfig}
+                        onChange={(strictMcpConfig) => updateClaudeProfile(profile.id, { strictMcpConfig })}
+                      />
+                    </Row>
+
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: '#74747C', marginBottom: 4, letterSpacing: 0.8 }}>
+                        SETTING SOURCES
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {CLAUDE_SETTING_SOURCE_OPTIONS.map((source) => {
+                          const active = profile.settingSources.includes(source)
+                          return (
+                            <button
+                              key={source}
+                              onClick={() => toggleClaudeProfileSettingSource(profile.id, source)}
+                              style={{
+                                padding: '3px 8px',
+                                fontSize: 11,
+                                fontWeight: 600,
+                                borderRadius: 999,
+                                border: `1px solid ${active ? 'rgba(84,140,90,0.45)' : 'rgba(89,86,83,0.3)'}`,
+                                color: active ? '#548C5A' : '#74747C',
+                                background: active ? 'rgba(84,140,90,0.12)' : 'rgba(89,86,83,0.1)',
+                                cursor: 'pointer',
+                                fontFamily: 'inherit',
+                              }}
+                            >
+                              {source}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <button
+                  onClick={addClaudeProfile}
+                  style={{
+                    marginBottom: 10,
+                    padding: '5px 12px',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    background: 'rgba(89,86,83,0.15)',
+                    border: '1px solid rgba(89,86,83,0.3)',
+                    borderRadius: 6,
+                    color: '#9A9692',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  + Add Profile
+                </button>
+
+                <div style={{ fontSize: 10, color: '#74747C', marginBottom: 6, letterSpacing: 0.8 }}>
+                  WORKSPACE RULES
+                </div>
+                {draft.claudeProfiles.workspaceRules.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#595653', marginBottom: 8 }}>
+                    No workspace rules. Default profile applies everywhere.
+                  </div>
+                )}
+                {draft.claudeProfiles.workspaceRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}
+                  >
+                    <input
+                      type="text"
+                      value={rule.pathPrefix}
+                      onChange={(e) => updateClaudeWorkspaceRule(rule.id, { pathPrefix: e.target.value })}
+                      placeholder="/Users/tradecraft/dev/work-project"
+                      style={{
+                        flex: 1,
+                        background: 'rgba(89,86,83,0.15)',
+                        border: '1px solid rgba(89,86,83,0.3)',
+                        borderRadius: 6,
+                        padding: '5px 8px',
+                        fontSize: 12,
+                        color: '#9A9692',
+                        outline: 'none',
+                        fontFamily: 'inherit',
+                      }}
+                    />
+                    <Select
+                      value={rule.profileId}
+                      options={draft.claudeProfiles.profiles.map((profile) => profile.id)}
+                      labels={Object.fromEntries(
+                        draft.claudeProfiles.profiles.map((profile) => [profile.id, profile.name || profile.id])
+                      )}
+                      onChange={(profileId) => updateClaudeWorkspaceRule(rule.id, { profileId })}
+                    />
+                    <button
+                      onClick={() => removeClaudeWorkspaceRule(rule.id)}
+                      style={{
+                        padding: '5px 10px',
+                        fontSize: 12,
+                        fontWeight: 500,
+                        background: 'rgba(196,80,80,0.12)',
+                        border: '1px solid rgba(196,80,80,0.32)',
+                        borderRadius: 6,
+                        color: '#c45050',
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={addClaudeWorkspaceRule}
+                  style={{
+                    padding: '5px 12px',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    background: 'rgba(89,86,83,0.15)',
+                    border: '1px solid rgba(89,86,83,0.3)',
+                    borderRadius: 6,
+                    color: '#9A9692',
+                    cursor: 'pointer',
+                    fontFamily: 'inherit',
+                  }}
+                >
+                  + Add Rule
+                </button>
               </Section>
             </>
           )}

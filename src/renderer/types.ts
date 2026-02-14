@@ -44,6 +44,39 @@ export type SystemSound =
 export type SchedulerRunStatus = 'idle' | 'running' | 'success' | 'error'
 export type SchedulerRunTrigger = 'cron' | 'manual'
 
+export type ClaudeSettingSource = 'user' | 'project' | 'local'
+export type ClaudePermissionMode =
+  | 'default'
+  | 'acceptEdits'
+  | 'bypassPermissions'
+  | 'delegate'
+  | 'dontAsk'
+  | 'plan'
+
+export interface ClaudeProfile {
+  id: string
+  name: string
+  settingsPath: string
+  mcpConfigPath: string
+  pluginDirs: string[]
+  settingSources: ClaudeSettingSource[]
+  agent: string
+  permissionMode: ClaudePermissionMode
+  strictMcpConfig: boolean
+}
+
+export interface ClaudeWorkspaceProfileRule {
+  id: string
+  pathPrefix: string
+  profileId: string
+}
+
+export interface ClaudeProfilesConfig {
+  defaultProfileId: string
+  profiles: ClaudeProfile[]
+  workspaceRules: ClaudeWorkspaceProfileRule[]
+}
+
 export interface WorkspaceContextSnapshot {
   directory: string
   generatedAt: number
@@ -195,6 +228,7 @@ export interface AppSettings {
   telemetry: {
     enabled: boolean
   }
+  claudeProfiles: ClaudeProfilesConfig
 }
 
 // ── Claude Chat Session Types ──────────────────────────────────────────
@@ -324,6 +358,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
   yoloMode: false,
   telemetry: {
     enabled: false,
+  },
+  claudeProfiles: {
+    defaultProfileId: 'default',
+    profiles: [
+      {
+        id: 'default',
+        name: 'Default',
+        settingsPath: '',
+        mcpConfigPath: '',
+        pluginDirs: [],
+        settingSources: ['user', 'project', 'local'],
+        agent: '',
+        permissionMode: 'default',
+        strictMcpConfig: false,
+      },
+    ],
+    workspaceRules: [],
   },
 }
 

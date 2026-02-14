@@ -6,6 +6,7 @@ import os from 'os'
 import path from 'path'
 import { getClaudeBinaryPath, getClaudeEnvironment } from './claude-session'
 import { logMainError, logMainEvent } from './diagnostics'
+import { resolveClaudeProfileForDirectory } from './claude-profile'
 
 type SchedulerRunStatus = 'idle' | 'running' | 'success' | 'error'
 type SchedulerRunTrigger = 'cron' | 'manual'
@@ -496,6 +497,19 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
   if (task.yoloMode) {
     args.push('--dangerously-skip-permissions')
   }
+  const profileResolution = resolveClaudeProfileForDirectory(task.workingDirectory)
+  if (profileResolution.cliArgs.length > 0) {
+    args.push(...profileResolution.cliArgs)
+  }
+  if (profileResolution.missingPathWarnings.length > 0) {
+    for (const warning of profileResolution.missingPathWarnings) {
+      logMainEvent('scheduler.profile.warning', {
+        taskId: task.id,
+        taskName: task.name,
+        warning,
+      }, 'warn')
+    }
+  }
   args.push('--', runPrompt)
 
   const binaryPath = getClaudeBinaryPath()
@@ -507,6 +521,10 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
     trigger,
     cwd: task.workingDirectory,
     yoloMode: task.yoloMode,
+    profileId: profileResolution.profile.id,
+    profileName: profileResolution.profile.name,
+    profileSource: profileResolution.source,
+    profileRulePrefix: profileResolution.matchedRulePathPrefix,
   })
 
   const proc = spawn(binaryPath, args, {

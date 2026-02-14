@@ -11,6 +11,7 @@ import { playChatCompletionDing } from '../../lib/soundPlayer'
 import { buildWorkspaceContextPrompt } from '../../lib/workspaceContext'
 import { computeRunReward } from '../../lib/rewardEngine'
 import { logRendererEvent } from '../../lib/diagnostics'
+import { resolveClaudeProfile } from '../../lib/claudeProfile'
 import { ChatMessageBubble } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 
@@ -208,6 +209,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const workspaceRoot = useWorkspaceStore((s) => s.rootPath)
   const recentFolders = useWorkspaceStore((s) => s.recentFolders)
   const scopes = useSettingsStore((s) => s.settings.scopes)
+  const claudeProfilesConfig = useSettingsStore((s) => s.settings.claudeProfiles)
   const soundsEnabled = useSettingsStore((s) => s.settings.soundsEnabled)
   const yoloMode = useSettingsStore((s) => s.settings.yoloMode)
   const loadHistory = useChatHistoryStore((s) => s.loadHistory)
@@ -240,6 +242,9 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const isDirectoryCustom = chatSession ? chatSession.directoryMode === 'custom' : false
   const hasStartedConversation = Boolean(chatSession?.agentId)
   const isRunActive = status === 'running' || Boolean(claudeSessionId)
+  const activeClaudeProfile = useMemo(() => {
+    return resolveClaudeProfile(claudeProfilesConfig, workingDir ?? null)
+  }, [claudeProfilesConfig, workingDir])
 
   useEffect(() => {
     agentIdRef.current = chatSession?.agentId ?? null
@@ -1297,6 +1302,37 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
             r {latestRewardForChat.rewardScore}
           </span>
         )}
+        <span
+          title={
+            activeClaudeProfile.matchedRule
+              ? `Claude profile: ${activeClaudeProfile.profile.name} (rule: ${activeClaudeProfile.matchedRule.pathPrefix})`
+              : `Claude profile: ${activeClaudeProfile.profile.name}`
+          }
+          style={{
+            padding: '1px 6px',
+            borderRadius: 999,
+            border:
+              activeClaudeProfile.source === 'rule'
+                ? '1px solid rgba(84,140,90,0.45)'
+                : '1px solid rgba(116,116,124,0.45)',
+            color:
+              activeClaudeProfile.source === 'rule'
+                ? '#548C5A'
+                : activeClaudeProfile.source === 'default'
+                  ? '#9A9692'
+                  : '#74747C',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 0.4,
+            textTransform: 'uppercase',
+            maxWidth: 96,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          p {activeClaudeProfile.profile.id}
+        </span>
         <span
           title={workingDir ?? 'No working directory selected'}
           style={{
