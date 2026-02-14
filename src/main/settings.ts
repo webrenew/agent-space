@@ -4,10 +4,12 @@ import path from 'path'
 import os from 'os'
 import type { AppSettings } from '../renderer/types'
 
+const DEFAULT_LOCAL_DEV_DIRECTORY = path.join(os.homedir(), 'dev')
+
 const DEFAULT_SETTINGS: AppSettings = {
   general: {
-    startingDirectory: 'home',
-    customDirectory: '',
+    startingDirectory: 'custom',
+    customDirectory: DEFAULT_LOCAL_DEV_DIRECTORY,
     shell: 'default',
     customShell: ''
   },
@@ -49,6 +51,29 @@ const SETTINGS_FILE = path.join(SETTINGS_DIR, 'settings.json')
 
 let cachedSettings: AppSettings = { ...DEFAULT_SETTINGS }
 
+function normalizeStartingDirectory(settings: AppSettings): { settings: AppSettings; changed: boolean } {
+  const customDirectory = settings.general.customDirectory?.trim() ?? ''
+  const shouldUseDevDefault =
+    settings.general.startingDirectory === 'home' &&
+    customDirectory.length === 0
+
+  if (!shouldUseDevDefault) {
+    return { settings, changed: false }
+  }
+
+  return {
+    changed: true,
+    settings: {
+      ...settings,
+      general: {
+        ...settings.general,
+        startingDirectory: 'custom',
+        customDirectory: DEFAULT_LOCAL_DEV_DIRECTORY,
+      },
+    },
+  }
+}
+
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
   const result = { ...target }
   for (const key of Object.keys(source)) {
@@ -72,10 +97,18 @@ export function loadSettings(): AppSettings {
     if (fs.existsSync(SETTINGS_FILE)) {
       const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8')
       const parsed = JSON.parse(raw)
-      cachedSettings = deepMerge(
+      const merged = deepMerge(
         DEFAULT_SETTINGS as unknown as Record<string, unknown>,
         parsed as Record<string, unknown>
       ) as unknown as AppSettings
+
+      const normalized = normalizeStartingDirectory(merged)
+      cachedSettings = normalized.settings
+      if (normalized.changed) {
+        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(cachedSettings, null, 2), 'utf-8')
+      }
+    } else {
+      cachedSettings = { ...DEFAULT_SETTINGS }
     }
   } catch {
     cachedSettings = { ...DEFAULT_SETTINGS }

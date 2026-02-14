@@ -72,6 +72,22 @@ function formatSize(bytes: number): string {
   return `${bytes}B`
 }
 
+function normalizeAbsolutePath(input: string): string {
+  const segments = input.split('/')
+  const stack: string[] = []
+
+  for (const segment of segments) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      if (stack.length > 0) stack.pop()
+      continue
+    }
+    stack.push(segment)
+  }
+
+  return stack.length === 0 ? '/' : `/${stack.join('/')}`
+}
+
 // ── Props ────────────────────────────────────────────────────────────
 
 interface Props {
@@ -94,8 +110,12 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [renaming, setRenaming] = useState<RenameState | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [jumpPath, setJumpPath] = useState('')
+  const [homeDir, setHomeDir] = useState('')
+  const [showQuickJumpMenu, setShowQuickJumpMenu] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const renameInputRef = useRef<HTMLInputElement>(null)
+  const quickJumpMenuRef = useRef<HTMLDivElement>(null)
 
   // Close context menu on click outside
   useEffect(() => {
@@ -104,6 +124,18 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
     window.addEventListener('click', handler)
     return () => window.removeEventListener('click', handler)
   }, [contextMenu])
+
+  // Close quick-jump menu on outside click
+  useEffect(() => {
+    if (!showQuickJumpMenu) return
+    const handler = (event: MouseEvent) => {
+      if (quickJumpMenuRef.current && !quickJumpMenuRef.current.contains(event.target as Node)) {
+        setShowQuickJumpMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showQuickJumpMenu])
 
   // Focus rename input when it appears
   useEffect(() => {
@@ -118,6 +150,25 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
     if (workspaceRoot) setBrowsePath(workspaceRoot)
   }, [workspaceRoot])
 
+  // Keep path input synced with currently browsed directory.
+  useEffect(() => {
+    setJumpPath(browsePath)
+  }, [browsePath])
+
+  useEffect(() => {
+    let cancelled = false
+    window.electronAPI.fs.homeDir()
+      .then((dir) => {
+        if (!cancelled) setHomeDir(dir)
+      })
+      .catch(() => {
+        if (!cancelled) setHomeDir('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // Handle "Open Folder" via native dialog
   const handleOpenFolder = useCallback(async () => {
     try {
@@ -126,6 +177,41 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
     } catch (err) {
       console.error('[FileExplorer] Open folder dialog failed:', err)
     }
+  }, [openFolder])
+
+  const resolveJumpPath = useCallback((rawValue: string): string | null => {
+    const trimmed = rawValue.trim()
+    if (!trimmed) return null
+
+    let candidate = trimmed
+    if ((candidate === '~' || candidate.startsWith('~/')) && homeDir) {
+      candidate = `${homeDir}${candidate.slice(1)}`
+    }
+
+    if (!candidate.startsWith('/')) {
+      const base = browsePath || workspaceRoot || homeDir || '/'
+      const baseTrimmed = base.length > 1 && base.endsWith('/') ? base.slice(0, -1) : base
+      candidate = `${baseTrimmed}/${candidate}`
+    }
+
+    return normalizeAbsolutePath(candidate)
+  }, [browsePath, homeDir, workspaceRoot])
+
+  const handleJumpSubmit = useCallback((openAsWorkspace: boolean) => {
+    const resolved = resolveJumpPath(jumpPath)
+    if (!resolved) return
+    if (openAsWorkspace) {
+      openFolder(resolved)
+    } else {
+      setBrowsePath(resolved)
+    }
+    setShowQuickJumpMenu(false)
+  }, [jumpPath, openFolder, resolveJumpPath])
+
+  const handleQuickJumpRecent = useCallback((path: string) => {
+    openFolder(path)
+    setBrowsePath(path)
+    setShowQuickJumpMenu(false)
   }, [openFolder])
 
   // Load displayed directory
@@ -296,6 +382,8 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
 
   // Flatten tree for rendering
   const flatNodes = flattenTree(tree)
+  const quickJumpFolders = recentFolders.slice(0, 8)
+  const hasQuickJumpOptions = Boolean(workspaceRoot) || quickJumpFolders.length > 0
 
   // No folder open — show welcome state
   if (!browsePath) {
@@ -314,6 +402,45 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
           >
             Open Folder
           </button>
+          <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              value={jumpPath}
+              onChange={(e) => setJumpPath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  handleJumpSubmit(true)
+                }
+              }}
+              placeholder="Jump to path (for example: ~/dev/my-project)"
+              style={{
+                flex: 1,
+                background: 'rgba(89,86,83,0.12)',
+                border: '1px solid rgba(89,86,83,0.25)',
+                borderRadius: 4,
+                color: '#9A9692',
+                fontSize: 11,
+                fontFamily: 'inherit',
+                padding: '5px 8px',
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={() => handleJumpSubmit(true)}
+              style={{
+                background: 'transparent',
+                color: '#9A9692',
+                border: '1px solid rgba(89,86,83,0.3)',
+                borderRadius: 4,
+                padding: '5px 8px',
+                fontSize: 11,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+              }}
+            >
+              Go
+            </button>
+          </div>
           {recentFolders.length > 0 && (
             <div style={{ marginTop: 8, width: '100%' }}>
               <div style={{ color: '#595653', fontSize: 10, fontWeight: 600, letterSpacing: 1, marginBottom: 6, paddingLeft: 4 }}>
@@ -354,22 +481,132 @@ export function FileExplorerPanel({ onOpenFile }: Props) {
         >
           ↑
         </button>
-        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, color: '#74747C' }}>
-          {browsePath.split('/').filter(Boolean).map((seg, i, arr) => {
-            const segPath = '/' + arr.slice(0, i + 1).join('/')
-            const isLast = i === arr.length - 1
-            return (
-              <span key={segPath}>
-                <span
-                  onClick={() => handleNavigateTo(segPath)}
-                  style={{ cursor: 'pointer', color: isLast ? '#9A9692' : '#595653' }}
+        <input
+          value={jumpPath}
+          onChange={(e) => setJumpPath(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              handleJumpSubmit(false)
+            }
+          }}
+          placeholder="Jump to path..."
+          style={{
+            flex: 1,
+            background: 'rgba(89,86,83,0.12)',
+            border: '1px solid rgba(89,86,83,0.25)',
+            borderRadius: 4,
+            color: '#9A9692',
+            fontSize: 11,
+            fontFamily: 'inherit',
+            padding: '4px 8px',
+            outline: 'none',
+          }}
+        />
+        <button
+          onClick={() => handleJumpSubmit(false)}
+          style={{
+            background: 'transparent',
+            border: '1px solid rgba(89,86,83,0.3)',
+            borderRadius: 4,
+            color: '#9A9692',
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 11,
+            padding: '2px 7px',
+          }}
+          title="Jump to typed path"
+        >
+          go
+        </button>
+        <div ref={quickJumpMenuRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowQuickJumpMenu((prev) => !prev)}
+            disabled={!hasQuickJumpOptions}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: hasQuickJumpOptions ? '#595653' : '#3f3e3c',
+              cursor: hasQuickJumpOptions ? 'pointer' : 'default',
+              fontFamily: 'inherit',
+              fontSize: 11,
+              padding: '0 4px',
+            }}
+            title={hasQuickJumpOptions ? 'Quick jump from recent folders' : 'No recent folders yet'}
+          >
+            recent
+          </button>
+          {showQuickJumpMenu && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: 4,
+                minWidth: 260,
+                maxWidth: 380,
+                background: '#1a1a19',
+                border: '1px solid rgba(89,86,83,0.3)',
+                borderRadius: 6,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+                padding: '4px 0',
+                zIndex: 40,
+              }}
+            >
+              {workspaceRoot && (
+                <button
+                  onClick={() => handleQuickJumpRecent(workspaceRoot)}
+                  className="hover-row"
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#9A9692',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    padding: '6px 10px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={workspaceRoot}
                 >
-                  {seg}
-                </span>
-                {!isLast && <span style={{ color: '#3a3a38', margin: '0 3px' }}>/</span>}
-              </span>
-            )
-          })}
+                  Workspace: {workspaceRoot}
+                </button>
+              )}
+              {quickJumpFolders.map((folder) => (
+                <button
+                  key={folder}
+                  onClick={() => handleQuickJumpRecent(folder)}
+                  className="hover-row"
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#9A9692',
+                    fontFamily: 'inherit',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    padding: '6px 10px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={folder}
+                >
+                  {folder}
+                </button>
+              ))}
+              {quickJumpFolders.length === 0 && !workspaceRoot && (
+                <div style={{ color: '#595653', fontSize: 11, padding: '6px 10px' }}>
+                  No recent folders yet
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <button
           onClick={() => void handleOpenFolder()}
