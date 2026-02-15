@@ -12,8 +12,12 @@ Thanks for contributing.
 
 Prerequisites:
 
-- Node.js 20.x to 22.x (22.x recommended)
+- Node.js 22.x
 - pnpm 10.12.4
+
+Runtime and types policy:
+
+- [`docs/engineering/node-runtime-types-policy.md`](./docs/engineering/node-runtime-types-policy.md)
 
 Install:
 

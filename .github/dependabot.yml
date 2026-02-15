@@ -4,13 +4,68 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      npm-root-nonbreaking:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "three"
+        update-types:
+          - version-update:semver-minor
+      - dependency-name: "@types/three"
+        update-types:
+          - version-update:semver-minor
+      - dependency-name: "@xterm/addon-fit"
+        update-types:
+          - version-update:semver-minor
   - package-ecosystem: npm
     directory: "/web"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
+    groups:
+      npm-web-nonbreaking:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "three"
+        update-types:
+          - version-update:semver-minor
+      - dependency-name: "@types/three"
+        update-types:
+          - version-update:semver-minor
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions-nonbreaking:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major

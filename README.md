@@ -18,7 +18,7 @@ Agent Observer is a desktop-first observability workspace for AI agents, with a 
 
 ## Prerequisites
 
-- Node.js 20.x to 22.x (22.x recommended)
+- Node.js 22.x
 - pnpm 10.12.4
 - macOS (Apple Silicon) for packaged desktop artifacts
 
@@ -65,6 +65,7 @@ pnpm -C web dev
 ## Contributing and Community
 
 - Contributing guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Runtime and Node types policy: [`docs/engineering/node-runtime-types-policy.md`](./docs/engineering/node-runtime-types-policy.md)
 - Code of conduct: [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md)
 - Security policy: [`SECURITY.md`](./SECURITY.md)
 - Support guide: [`SUPPORT.md`](./SUPPORT.md)
