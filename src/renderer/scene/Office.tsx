@@ -141,6 +141,48 @@ export function Office() {
             <cylinderGeometry args={[0.45, 0.45, 0.04, 14]} />
             <meshStandardMaterial color="#4a3728" />
           </mesh>
+
+          {/* Party spread */}
+          <mesh position={[PARTY_CENTER[0] - 0.2, 0.77, PARTY_CENTER[2] - 0.06]} castShadow>
+            <boxGeometry args={[0.46, 0.035, 0.46]} />
+            <meshStandardMaterial color="#c87830" roughness={0.8} />
+          </mesh>
+          <mesh position={[PARTY_CENTER[0] + 0.16, 0.79, PARTY_CENTER[2] + 0.03]} castShadow>
+            <cylinderGeometry args={[0.19, 0.19, 0.02, 24]} />
+            <meshStandardMaterial color="#f4d03f" roughness={0.58} />
+          </mesh>
+          {Array.from({ length: 6 }, (_, index) => {
+            const angle = (index / 6) * Math.PI * 2
+            return (
+              <mesh
+                key={`party-slice-${index}`}
+                position={[
+                  PARTY_CENTER[0] + 0.16 + Math.cos(angle) * 0.09,
+                  0.805,
+                  PARTY_CENTER[2] + 0.03 + Math.sin(angle) * 0.09,
+                ]}
+                rotation={[0, -angle, 0]}
+              >
+                <boxGeometry args={[0.075, 0.008, 0.03]} />
+                <meshStandardMaterial color="#c45050" />
+              </mesh>
+            )
+          })}
+
+          {/* Party accent lights */}
+          <pointLight
+            position={[PARTY_CENTER[0] - 1.1, 2.4, PARTY_CENTER[2] - 0.7]}
+            color="#fbbf24"
+            intensity={0.45}
+            distance={5.2}
+          />
+          <pointLight
+            position={[PARTY_CENTER[0] + 1.2, 2.2, PARTY_CENTER[2] + 0.8]}
+            color="#fb7185"
+            intensity={0.32}
+            distance={4.8}
+          />
+
           <PizzaParty
             key={`pizza-party-${partyWaveKey}`}
             position={[PARTY_CENTER[0], -0.55, PARTY_CENTER[2]]}
