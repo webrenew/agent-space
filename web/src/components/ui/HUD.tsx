@@ -7,6 +7,7 @@ import { STATUS_LABELS, AGENT_COLORS } from "@/types";
 import type { AgentStatus } from "@/types";
 import type { CelebrationType } from "@/types";
 import { AGENT_SPACE_RELEASES_URL } from "@/lib/downloads";
+import { setManualAgentOverride } from "@/lib/simulation";
 import { Minimap } from "./Minimap";
 
 const STATUS_COLOR: Record<AgentStatus, string> = {
@@ -285,6 +286,7 @@ function TopBar({
       }
 
       selectAgent(target.id);
+      setManualAgentOverride(target.id, task, status);
       updateAgent(target.id, { status, currentTask: task });
       showToast(toastMessage, "success");
     },

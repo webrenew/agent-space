@@ -164,3 +164,11 @@ a {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* Keep docs sidebar pinned on desktop even if upstream sticky var classes fail to apply. */
+#nd-docs-layout [data-sidebar-placeholder] {
+  position: sticky;
+  top: var(--fd-docs-row-1, 0px);
+  align-self: start;
+  height: calc(100dvh - var(--fd-docs-row-1, 0px));
+}

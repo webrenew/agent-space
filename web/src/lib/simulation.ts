@@ -23,6 +23,12 @@ interface AgentCarryState {
   files: number
 }
 
+interface ManualAgentOverride {
+  task: string
+  status: AgentStatus
+  untilMs: number
+}
+
 const SCRIPT_BY_AGENT_ID: Record<string, AgentLoopScript> = {
   'agent-1': {
     task: 'Refactoring auth middleware',
@@ -114,7 +120,10 @@ let anchorTimeMs: number | null = null
 let previousTickMs: number | null = null
 const lastPhaseIndexByAgentId = new Map<string, number>()
 const carryByAgentId = new Map<string, AgentCarryState>()
+const manualOverridesByAgentId = new Map<string, ManualAgentOverride>()
 let lastToastAtMs = 0
+
+const DEFAULT_MANUAL_OVERRIDE_MS = 12_000
 
 function ensureCarry(agentId: string): AgentCarryState {
   const existing = carryByAgentId.get(agentId)
@@ -172,6 +181,21 @@ export interface SimulationUpdate {
   toasts: Array<{ message: string; type: 'info' | 'error' | 'success' }>
 }
 
+export function setManualAgentOverride(
+  agentId: string,
+  task: string,
+  status: AgentStatus,
+  options?: { now?: number; durationMs?: number }
+): void {
+  const now = options?.now ?? Date.now()
+  const durationMs = options?.durationMs ?? DEFAULT_MANUAL_OVERRIDE_MS
+  manualOverridesByAgentId.set(agentId, {
+    task,
+    status,
+    untilMs: now + Math.max(1_000, durationMs),
+  })
+}
+
 export function simulateStep(agents: Agent[], now = Date.now()): SimulationUpdate {
   const updates: SimulationUpdate = { agentUpdates: [], toasts: [] }
   if (agents.length === 0) return updates
@@ -204,9 +228,18 @@ export function simulateStep(agents: Agent[], now = Date.now()): SimulationUpdat
     carry.output -= outputDelta
     carry.files -= filesDelta
 
+    const manual = manualOverridesByAgentId.get(agent.id)
+    const hasManualOverride = manual !== undefined && manual.untilMs > now
+    if (!hasManualOverride && manual !== undefined) {
+      manualOverridesByAgentId.delete(agent.id)
+    }
+
+    const targetStatus = hasManualOverride ? manual.status : phase.status
+    const targetTask = hasManualOverride ? manual.task : script.task
+
     const changes: Partial<Agent> = {}
-    if (agent.status !== phase.status) changes.status = phase.status
-    if (agent.currentTask !== script.task) changes.currentTask = script.task
+    if (agent.status !== targetStatus) changes.status = targetStatus
+    if (agent.currentTask !== targetTask) changes.currentTask = targetTask
     if (inputDelta > 0) changes.tokens_input = agent.tokens_input + inputDelta
     if (outputDelta > 0) changes.tokens_output = agent.tokens_output + outputDelta
     if (filesDelta > 0) changes.files_modified = agent.files_modified + filesDelta

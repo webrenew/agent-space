@@ -8,6 +8,9 @@ export default function Layout({ children }: { children: ReactNode }) {
     <RootProvider theme={{ enabled: false }}>
       <DocsLayout
         tree={source.pageTree}
+        sidebar={{
+          collapsible: false,
+        }}
         containerProps={{
           style: {
             "--fd-layout-width": "100dvw",
