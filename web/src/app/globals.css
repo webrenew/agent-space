@@ -165,10 +165,37 @@ a {
   user-select: none;
 }
 
-/* Keep docs sidebar pinned on desktop even if upstream sticky var classes fail to apply. */
+/* Docs shell: lock viewport scroll and let only the article column scroll. */
+html:has(#nd-docs-layout),
+body:has(#nd-docs-layout) {
+  height: 100%;
+  overflow: hidden;
+}
+
+#nd-docs-layout {
+  height: var(--fd-docs-height, 100dvh);
+  min-height: 0;
+  overflow: hidden;
+}
+
+#nd-page {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: clip;
+  overscroll-behavior: contain;
+}
+
 #nd-docs-layout [data-sidebar-placeholder] {
-  position: sticky;
-  top: var(--fd-docs-row-1, 0px);
-  align-self: start;
-  height: calc(100dvh - var(--fd-docs-row-1, 0px));
+  position: static;
+  top: auto;
+  align-self: stretch;
+  height: 100%;
+  min-height: 0;
+}
+
+#nd-docs-layout [data-sidebar-placeholder] > aside {
+  position: static;
+  inset: auto;
+  height: 100%;
+  width: 100%;
 }
