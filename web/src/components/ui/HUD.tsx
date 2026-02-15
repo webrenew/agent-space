@@ -171,7 +171,10 @@ function TopBar({
   const selectAgent = useDemoStore((s) => s.selectAgent);
   const updateAgent = useDemoStore((s) => s.updateAgent);
   const addToast = useDemoStore((s) => s.addToast);
-  const isMac = useMemo(() => navigator.platform.toUpperCase().includes("MAC"), []);
+  const isMac = useMemo(
+    () => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"),
+    []
+  );
   const modLabel = isMac ? "Cmd" : "Ctrl";
   const devToolsShortcut = isMac ? "⌥⌘I" : "Ctrl+Shift+I";
   const [timeStr, setTimeStr] = useState(() =>
