@@ -3,7 +3,7 @@ import { useDemoStore } from "@/stores/useDemoStore";
 import { simulateStep } from "@/lib/simulation";
 import type { Agent } from "@/types";
 
-const TICK_MS = 1500;
+const TICK_MS = 900;
 const CELEBRATION_DURATION_MS = 4000;
 
 export function useSimulation() {
@@ -29,7 +29,7 @@ export function useSimulation() {
         }
       }
 
-      const { agentUpdates, toasts } = simulateStep(agents);
+      const { agentUpdates, toasts } = simulateStep(agents, now);
 
       // Merge updates per agent so later changes don't overwrite earlier ones
       const merged = new Map<string, Partial<Agent>>();
