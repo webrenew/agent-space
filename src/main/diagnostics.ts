@@ -24,6 +24,7 @@ const LOG_DIR_NAME = 'logs'
 const LOG_FILE_NAME = 'app.ndjson'
 const ROTATED_FILE_NAME = 'app.previous.ndjson'
 const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024
+let diagnosticsWriteQueue: Promise<void> = Promise.resolve()
 
 function getLogsDirPath(): string {
   try {
@@ -33,11 +34,9 @@ function getLogsDirPath(): string {
   }
 }
 
-function ensureLogDirectory(): void {
+async function ensureLogDirectory(): Promise<void> {
   const dir = getLogsDirPath()
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
+  await fs.promises.mkdir(dir, { recursive: true })
 }
 
 function serializePayload(payload: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
@@ -61,29 +60,51 @@ function serializePayload(payload: Record<string, unknown> | undefined): Record<
   }
 }
 
-function appendDiagnostics(entry: DiagnosticsEntry): void {
-  try {
-    ensureLogDirectory()
-    const logPath = getDiagnosticsLogPath()
-    try {
-      const stat = fs.statSync(logPath)
-      if (stat.size > MAX_LOG_FILE_BYTES) {
-        const rotatedPath = path.join(getLogsDirPath(), ROTATED_FILE_NAME)
-        try {
-          if (fs.existsSync(rotatedPath)) fs.unlinkSync(rotatedPath)
-        } catch {
-          // ignore rotate cleanup failures
-        }
-        fs.renameSync(logPath, rotatedPath)
-      }
-    } catch {
-      // No existing log file yet.
-    }
+function enqueueDiagnosticsWrite(task: () => Promise<void>): void {
+  diagnosticsWriteQueue = diagnosticsWriteQueue
+    .then(task)
+    .catch((err) => {
+      console.error('[diagnostics] Failed to append diagnostics log:', err)
+    })
+}
 
-    fs.appendFileSync(logPath, `${JSON.stringify(entry)}\n`, 'utf-8')
+function isMissingFileError(err: unknown): boolean {
+  return Boolean(
+    err
+    && typeof err === 'object'
+    && 'code' in err
+    && (err as NodeJS.ErrnoException).code === 'ENOENT'
+  )
+}
+
+async function rotateLogsIfNeeded(logPath: string): Promise<void> {
+  let stat: fs.Stats
+  try {
+    stat = await fs.promises.stat(logPath)
   } catch (err) {
-    console.error('[diagnostics] Failed to append diagnostics log:', err)
+    if (isMissingFileError(err)) return
+    throw err
   }
+
+  if (stat.size <= MAX_LOG_FILE_BYTES) return
+
+  const rotatedPath = path.join(getLogsDirPath(), ROTATED_FILE_NAME)
+  try {
+    await fs.promises.rm(rotatedPath, { force: true })
+  } catch {
+    // ignore rotate cleanup failures
+  }
+  await fs.promises.rename(logPath, rotatedPath)
+}
+
+function appendDiagnostics(entry: DiagnosticsEntry): void {
+  const line = `${JSON.stringify(entry)}\n`
+  enqueueDiagnosticsWrite(async () => {
+    await ensureLogDirectory()
+    const logPath = getDiagnosticsLogPath()
+    await rotateLogsIfNeeded(logPath)
+    await fs.promises.appendFile(logPath, line, 'utf-8')
+  })
 }
 
 function normalizeRendererRequest(
