@@ -82,6 +82,7 @@ const runtimeByTaskId = new Map<string, SchedulerTaskRuntime>()
 const runningProcessByTaskId = new Map<string, ChildProcess>()
 const cronParseCache = new Map<string, ParsedCron>()
 const loadValidationErrorsByTaskId = new Map<string, string>()
+const forceKillTimerByTaskId = new Map<string, NodeJS.Timeout>()
 
 function resolveSchedulerRunMaxRuntimeMs(): number {
   const raw = process.env.AGENT_SPACE_SCHEDULER_MAX_RUNTIME_MS
@@ -95,6 +96,28 @@ function resolveSchedulerRunMaxRuntimeMs(): number {
     return SCHEDULER_RUN_DEFAULT_MAX_RUNTIME_MS
   }
   return parsed
+}
+
+function clearSchedulerForceKillTimer(taskId: string): void {
+  const timer = forceKillTimerByTaskId.get(taskId)
+  if (!timer) return
+  clearTimeout(timer)
+  forceKillTimerByTaskId.delete(taskId)
+}
+
+function scheduleSchedulerForceKill(taskId: string, proc: ChildProcess, reason: string): void {
+  clearSchedulerForceKillTimer(taskId)
+  const timer = setTimeout(() => {
+    forceKillTimerByTaskId.delete(taskId)
+    try {
+      if (proc.exitCode !== null || proc.signalCode !== null) return
+      proc.kill('SIGKILL')
+      logMainEvent('scheduler.process.force_kill', { taskId, reason }, 'warn')
+    } catch (err) {
+      logMainError('scheduler.process.force_kill_failed', err, { taskId, reason })
+    }
+  }, SCHEDULER_FORCE_KILL_TIMEOUT_MS)
+  forceKillTimerByTaskId.set(taskId, timer)
 }
 
 function createRuntime(): SchedulerTaskRuntime {
@@ -491,10 +514,11 @@ function deleteTask(taskId: string): void {
   if (runningProc) {
     try {
       runningProc.kill('SIGTERM')
-    } catch {
-      // Ignore termination failure.
+      scheduleSchedulerForceKill(taskId, runningProc, 'delete')
+    } catch (err) {
+      logMainError('scheduler.process.stop_failed', err, { taskId, reason: 'delete' })
+      scheduleSchedulerForceKill(taskId, runningProc, 'delete')
     }
-    runningProcessByTaskId.delete(taskId)
   }
 
   writeTasksToDisk(tasksCache)
@@ -588,6 +612,7 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  clearSchedulerForceKillTimer(task.id)
   runningProcessByTaskId.set(task.id, proc)
   broadcastSchedulerUpdate()
 
@@ -676,6 +701,7 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
     proc.on('exit', (code) => {
       clearTimeout(runtimeTimer)
       clearForceKillTimer()
+      clearSchedulerForceKillTimer(task.id)
       rl.close()
       runningProcessByTaskId.delete(task.id)
 
@@ -715,6 +741,7 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
     proc.on('error', (err) => {
       clearTimeout(runtimeTimer)
       clearForceKillTimer()
+      clearSchedulerForceKillTimer(task.id)
       rl.close()
       runningProcessByTaskId.delete(task.id)
       const completedAt = Date.now()
@@ -806,12 +833,13 @@ export function cleanupScheduler(): void {
     clearInterval(schedulerTimer)
     schedulerTimer = null
   }
-  for (const [, proc] of runningProcessByTaskId) {
+  for (const [taskId, proc] of runningProcessByTaskId) {
     try {
       proc.kill('SIGTERM')
-    } catch {
-      // Ignore termination failures.
+      scheduleSchedulerForceKill(taskId, proc, 'cleanup')
+    } catch (err) {
+      logMainError('scheduler.process.stop_failed', err, { taskId, reason: 'cleanup' })
+      scheduleSchedulerForceKill(taskId, proc, 'cleanup')
     }
   }
-  runningProcessByTaskId.clear()
 }
