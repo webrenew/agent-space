@@ -15,6 +15,16 @@ export function formatDuration(durationMs: number | null): string {
   return `${hours}h ${remainderMinutes}m`
 }
 
+export function runStatusColor(
+  lastStatus: 'idle' | 'running' | 'success' | 'error',
+  isRunning: boolean
+): string {
+  if (isRunning || lastStatus === 'running') return '#d4a040'
+  if (lastStatus === 'success') return '#548C5A'
+  if (lastStatus === 'error') return '#c45050'
+  return '#74747C'
+}
+
 export function parseCsv(value: string): string[] {
   return value
     .split(',')

@@ -1,5 +1,5 @@
 import { Row, Section, Toggle } from './common'
-import { formatDateTime, formatDuration } from './utils'
+import { formatDateTime, formatDuration, runStatusColor } from './utils'
 import type { SchedulerTaskDraft } from './types'
 
 const DEFAULT_CRON_EXAMPLES = ['*/15 * * * *', '0 * * * *', '0 9 * * 1-5', '30 18 * * *']
@@ -82,14 +82,7 @@ export function SchedulerTab({
 
       {scheduleDrafts.map((task) => {
         const busy = schedulerBusyId === task.id
-        const statusColor =
-          task.lastStatus === 'success'
-            ? '#548C5A'
-            : task.lastStatus === 'error'
-              ? '#c45050'
-              : task.lastStatus === 'running'
-                ? '#d4a040'
-                : '#74747C'
+        const statusColor = runStatusColor(task.lastStatus, task.isRunning)
 
         return (
           <div
