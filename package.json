@@ -14,7 +14,7 @@
     "package": "electron-vite build && electron-builder --mac --dir",
     "package:dmg": "electron-vite build && electron-builder --mac dmg",
     "test:smoke": "pnpm build && playwright test -c playwright.smoke.config.ts",
-    "test:coverage": "pnpm exec c8 --report-dir coverage --reporter=text-summary --reporter=lcov --reporter=json-summary playwright test -c playwright.smoke.config.ts --grep-invert \"desktop smoke flows\"",
+    "test:coverage": "pnpm exec c8 --report-dir coverage --reporter=text-summary --reporter=lcov --reporter=json-summary playwright test -c playwright.smoke.config.ts --grep-invert \"desktop smoke flows|managed shell timeout terminates descendant process trees\"",
     "postinstall": "electron-rebuild -f -w node-pty",
     "prepare": "husky"
   },
