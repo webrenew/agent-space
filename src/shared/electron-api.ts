@@ -41,6 +41,7 @@ export const IPC_CHANNELS = {
     homeDir: 'fs:homeDir',
     stat: 'fs:stat',
     writeFile: 'fs:writeFile',
+    writeDataUrl: 'fs:writeDataUrl',
     openFolderDialog: 'fs:openFolderDialog',
     openFolder: 'fs:openFolder',
     rename: 'fs:rename',
@@ -127,6 +128,11 @@ export interface FsReadImageDataUrlResult {
 
 export interface FsReadDataUrlResult {
   dataUrl: string
+  size: number
+  mimeType: string
+}
+
+export interface FsWriteDataUrlResult {
   size: number
   mimeType: string
 }
@@ -245,6 +251,7 @@ export interface ElectronAPI {
     homeDir: () => Promise<string>
     stat: (filePath: string) => Promise<FsStatResult>
     writeFile: (filePath: string, content: string) => Promise<void>
+    writeDataUrl: (filePath: string, dataUrl: string) => Promise<FsWriteDataUrlResult>
     openFolderDialog: () => Promise<string | null>
     onOpenFolder: (callback: (folderPath: string) => void) => Unsubscribe
     rename: (oldPath: string, newName: string) => Promise<{ newPath: string }>

@@ -18,6 +18,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   smoke tests under `c8` and publishes coverage artifacts/summary.
 - App now checks GitHub releases on startup and shows an in-app update banner
   when a newer version is available.
+- Editor now supports staged image proposal diffs with apply/discard, while
+  unsupported non-text formats show explicit external-compare fallback guidance.
 
 ### Changed
 
