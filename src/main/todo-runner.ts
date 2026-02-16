@@ -609,17 +609,55 @@ function resetJob(jobId: string): TodoRunnerJobView {
   return toJobWithRuntime(job)
 }
 
-function findNextRunnableTodoIndex(job: TodoRunnerJobRecord): number | null {
-  for (let index = 0; index < job.todos.length; index += 1) {
-    const todo = job.todos[index]
-    if (todo.status === 'running') {
-      todo.status = 'pending'
+export function __testOnlyCollectStaleRunningTodoIndices(
+  todos: Array<Pick<TodoItemState, 'status'>>
+): number[] {
+  const staleIndexes: number[] = []
+  for (let index = 0; index < todos.length; index += 1) {
+    if (todos[index]?.status === 'running') {
+      staleIndexes.push(index)
     }
+  }
+  return staleIndexes
+}
+
+export function __testOnlyFindNextRunnableTodoIndex(
+  todos: Array<Pick<TodoItemState, 'status' | 'attempts'>>
+): number | null {
+  for (let index = 0; index < todos.length; index += 1) {
+    const todo = todos[index]
+    if (!todo) continue
+    if (todo.status === 'running') continue
     if (todo.status === 'done') continue
     if (todo.attempts >= TODO_MAX_ATTEMPTS) continue
     return index
   }
   return null
+}
+
+function reconcileStaleRunningTodos(job: TodoRunnerJobRecord): number {
+  if (runningProcessByJobId.has(job.id) || pendingStartByJobId.has(job.id)) return 0
+  const staleIndexes = __testOnlyCollectStaleRunningTodoIndices(job.todos)
+  if (staleIndexes.length === 0) return 0
+
+  for (const staleIndex of staleIndexes) {
+    const staleTodo = job.todos[staleIndex]
+    if (staleTodo) {
+      staleTodo.status = 'pending'
+    }
+  }
+
+  logMainEvent('todo_runner.todo.recovered_stale_running', {
+    jobId: job.id,
+    jobName: job.name,
+    recoveredCount: staleIndexes.length,
+    recoveredIndexes: staleIndexes,
+  }, 'warn')
+  return staleIndexes.length
+}
+
+function findNextRunnableTodoIndex(job: TodoRunnerJobRecord): number | null {
+  return __testOnlyFindNextRunnableTodoIndex(job.todos)
 }
 
 function buildRunnerPayload(job: TodoRunnerJobRecord, todo: TodoItemState, todoIndex: number) {
@@ -953,6 +991,15 @@ async function todoRunnerTick(): Promise<void> {
       runningProcessByJobId.size,
       pendingStartByJobId.size
     )
+
+    let recoveredStaleTodoCount = 0
+    for (const job of jobsCache) {
+      recoveredStaleTodoCount += reconcileStaleRunningTodos(job)
+    }
+    if (recoveredStaleTodoCount > 0) {
+      writeJobsToDisk(jobsCache)
+      broadcastTodoRunnerUpdate()
+    }
     if (availableSlots <= 0) return
 
     const jobCount = jobsCache.length
