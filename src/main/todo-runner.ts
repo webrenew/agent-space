@@ -88,6 +88,7 @@ interface RunningTodoProcess {
 const TODO_RUNNER_DIR = path.join(os.homedir(), '.agent-observer')
 const TODO_RUNNER_FILE = path.join(TODO_RUNNER_DIR, 'todo-runner.json')
 const TODO_RUNNER_TICK_MS = 5_000
+const TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000
 const TODO_RUNNER_FORCE_KILL_TIMEOUT_MS = 10_000
 const TODO_MAX_ATTEMPTS = 3
 
@@ -112,6 +113,20 @@ function createRuntime(): TodoRunnerRuntime {
     lastRunTrigger: null,
     currentTodoIndex: null,
   }
+}
+
+function resolveTodoRunnerMaxRuntimeMs(): number {
+  const raw = process.env.AGENT_SPACE_TODO_RUNNER_MAX_RUNTIME_MS
+  if (!raw) return TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    logMainEvent('todo_runner.invalid_timeout_config', {
+      rawValue: raw,
+      fallbackMs: TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS,
+    }, 'warn')
+    return TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS
+  }
+  return parsed
 }
 
 function ensureTodoRunnerDir(): void {
@@ -653,6 +668,35 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
   let stdoutTail = ''
   let stderrTail = ''
   let resultError: string | null = null
+  let timedOut = false
+
+  const maxRuntimeMs = resolveTodoRunnerMaxRuntimeMs()
+  const runtimeTimer = setTimeout(() => {
+    if (proc.exitCode !== null || proc.signalCode !== null) return
+    const timeoutSeconds = Math.max(1, Math.round(maxRuntimeMs / 1000))
+    timedOut = true
+    resultError = `Todo runner timed out after ${timeoutSeconds}s`
+    logMainEvent('todo_runner.todo.timeout', {
+      jobId: job.id,
+      jobName: job.name,
+      todoId,
+      todoIndex,
+      trigger,
+      maxRuntimeMs,
+    }, 'warn')
+    try {
+      proc.kill('SIGTERM')
+    } catch (err) {
+      logMainError('todo_runner.todo.timeout_sigterm_failed', err, {
+        jobId: job.id,
+        jobName: job.name,
+        todoId,
+        todoIndex,
+        trigger,
+      })
+    }
+    scheduleForceKill(job.id, proc, 'timeout')
+  }, maxRuntimeMs)
 
   rl?.on('line', (line) => {
     const trimmed = line.trim()
@@ -682,6 +726,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
 
   await new Promise<void>((resolve) => {
     proc.on('exit', (code) => {
+      clearTimeout(runtimeTimer)
       rl?.close()
       runningProcessByJobId.delete(job.id)
       clearForceKillTimer(job.id)
@@ -751,6 +796,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
           todoIndex,
           trigger,
           durationMs,
+          timedOut,
           error: errorMessage,
         }, 'error')
 
@@ -771,6 +817,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
     })
 
     proc.on('error', (err) => {
+      clearTimeout(runtimeTimer)
       rl?.close()
       runningProcessByJobId.delete(job.id)
       clearForceKillTimer(job.id)
