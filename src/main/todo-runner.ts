@@ -91,6 +91,7 @@ const TODO_RUNNER_TICK_MS = 5_000
 const TODO_RUNNER_DEFAULT_MAX_CONCURRENT_JOBS = 2
 const TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000
 const TODO_RUNNER_FORCE_KILL_TIMEOUT_MS = 10_000
+const TODO_RUNNER_ENV_VALUE_MAX_CHARS = 2_048
 const TODO_MAX_ATTEMPTS = 3
 
 let handlersRegistered = false
@@ -143,6 +144,24 @@ function resolveTodoRunnerMaxConcurrentJobs(): number {
     return TODO_RUNNER_DEFAULT_MAX_CONCURRENT_JOBS
   }
   return parsed
+}
+
+function limitEnvValue(value: string, maxChars = TODO_RUNNER_ENV_VALUE_MAX_CHARS): {
+  value: string
+  truncated: boolean
+} {
+  if (value.length <= maxChars) {
+    return { value, truncated: false }
+  }
+  return { value: value.slice(0, maxChars), truncated: true }
+}
+
+function isPayloadTransportSpawnError(err: unknown): err is NodeJS.ErrnoException {
+  if (!err || typeof err !== 'object') return false
+  const candidate = err as NodeJS.ErrnoException
+  const code = typeof candidate.code === 'string' ? candidate.code.toUpperCase() : ''
+  const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : ''
+  return code === 'E2BIG' || message.includes('e2big') || message.includes('argument list too long')
 }
 
 function ensureTodoRunnerDir(): void {
@@ -665,13 +684,19 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
   broadcastTodoRunnerUpdate()
 
   const payload = buildRunnerPayload(job, todo, todoIndex)
+  const payloadJson = JSON.stringify(payload)
+  const todoTextEnv = limitEnvValue(todo.text)
+  const promptEnv = limitEnvValue(job.prompt)
   const env = {
     ...process.env,
-    AGENT_SPACE_TODO_PAYLOAD: JSON.stringify(payload),
-    AGENT_SPACE_TODO_TEXT: todo.text,
+    AGENT_SPACE_TODO_PAYLOAD_TRANSPORT: 'stdin',
+    AGENT_SPACE_TODO_PAYLOAD_BYTES: String(Buffer.byteLength(payloadJson, 'utf8')),
+    AGENT_SPACE_TODO_TEXT: todoTextEnv.value,
+    AGENT_SPACE_TODO_TEXT_TRUNCATED: todoTextEnv.truncated ? '1' : '0',
     AGENT_SPACE_TODO_INDEX: String(todoIndex + 1),
     AGENT_SPACE_TODO_TOTAL: String(job.todos.length),
-    AGENT_SPACE_TODO_PROMPT: job.prompt,
+    AGENT_SPACE_TODO_PROMPT: promptEnv.value,
+    AGENT_SPACE_TODO_PROMPT_TRUNCATED: promptEnv.truncated ? '1' : '0',
     AGENT_SPACE_TODO_JOB_ID: job.id,
     AGENT_SPACE_TODO_JOB_NAME: job.name,
     AGENT_SPACE_YOLO_MODE: job.yoloMode ? '1' : '0',
@@ -688,7 +713,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
   broadcastTodoRunnerUpdate()
 
   try {
-    proc.stdin?.write(`${JSON.stringify(payload, null, 2)}\n`)
+    proc.stdin?.write(`${payloadJson}\n`)
     proc.stdin?.end()
   } catch {
     // Ignore stdin write failures; process may not read stdin.
@@ -854,6 +879,8 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
       const completedAt = Date.now()
       const durationMs = completedAt - startedAt
       const wasStoppedByUser = stoppedByUserJobIds.has(job.id)
+      const payloadTransportError = isPayloadTransportSpawnError(err)
+      const payloadTransportErrorMessage = 'Runner launch exceeded OS payload limits; payload stays on stdin and todo was not consumed'
       if (wasStoppedByUser) {
         stoppedByUserJobIds.delete(job.id)
       }
@@ -865,13 +892,17 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
             liveState.todo.status = 'pending'
             liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
             liveState.todo.lastError = null
+          } else if (payloadTransportError) {
+            liveState.todo.status = 'pending'
+            liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
+            liveState.todo.lastError = payloadTransportErrorMessage
           } else {
             liveState.todo.status = 'error'
             liveState.todo.lastError = `Failed to spawn runner: ${err.message}`
           }
           liveState.todo.lastDurationMs = durationMs
         }
-        if (!wasStoppedByUser) {
+        if (!wasStoppedByUser && !payloadTransportError) {
           liveState.job.enabled = false
         }
         liveState.job.updatedAt = completedAt
@@ -883,16 +914,31 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
         runtimeNext.lastDurationMs = durationMs
         runtimeNext.lastRunTrigger = trigger
         runtimeNext.lastStatus = wasStoppedByUser ? 'idle' : 'error'
-        runtimeNext.lastError = wasStoppedByUser ? null : liveState.todo?.lastError ?? `Failed to spawn runner: ${err.message}`
+        runtimeNext.lastError = wasStoppedByUser
+          ? null
+          : payloadTransportError
+            ? payloadTransportErrorMessage
+            : liveState.todo?.lastError ?? `Failed to spawn runner: ${err.message}`
         runtimeByJobId.set(liveState.job.id, runtimeNext)
       }
 
-      logMainError('todo_runner.todo.spawn_error', err, {
-        jobId: job.id,
-        jobName: job.name,
-        todoIndex,
-        trigger,
-      })
+      if (payloadTransportError) {
+        logMainEvent('todo_runner.todo.spawn_payload_error', {
+          jobId: job.id,
+          jobName: job.name,
+          todoIndex,
+          trigger,
+          code: err.code ?? null,
+          error: err.message,
+        }, 'warn')
+      } else {
+        logMainError('todo_runner.todo.spawn_error', err, {
+          jobId: job.id,
+          jobName: job.name,
+          todoIndex,
+          trigger,
+        })
+      }
 
       writeJobsToDisk(jobsCache)
       broadcastTodoRunnerUpdate()

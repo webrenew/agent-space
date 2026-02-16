@@ -32,7 +32,11 @@ interface SmokeSchedulerAPI {
 
 interface SmokeTodoRunnerJob {
   id: string
+  enabled: boolean
   isRunning: boolean
+  lastStatus: string
+  lastError: string | null
+  lastRunAt: number | null
 }
 
 interface SmokeTodoRunnerJobInput {
@@ -267,6 +271,39 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
     }, { workingDirectory: process.cwd() })
     expect(todoRunnerEditGuard.sawRunning).toBe(true)
     expect(todoRunnerEditGuard.errorMessage).toContain('Cannot edit todo items while job is running')
+
+    // Regression check: large prompt payloads should still launch (payload over
+    // stdin, env remains bounded) without E2BIG job-pausing failures.
+    const todoRunnerLargePayload = await mainWindow.evaluate(async ({ workingDirectory }) => {
+      const api = (window as unknown as { electronAPI: SmokeElectronAPI }).electronAPI
+      const hugePrompt = 'x'.repeat(3_000_000)
+      const created = await api.todoRunner.upsert({
+        name: 'Smoke large payload transport',
+        prompt: hugePrompt,
+        workingDirectory,
+        runnerCommand: '/bin/true',
+        enabled: false,
+        yoloMode: false,
+        todoItems: ['payload check task'],
+      })
+      await api.todoRunner.start(created.id)
+
+      const deadline = Date.now() + 8_000
+      let finalState: SmokeTodoRunnerJob | null = null
+      while (Date.now() < deadline) {
+        const jobs = await api.todoRunner.list()
+        const active = jobs.find((job) => job.id === created.id) ?? null
+        if (!active) break
+        finalState = active
+        if (!active.isRunning && active.lastRunAt !== null) break
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+
+      await api.todoRunner.delete(created.id)
+      return finalState
+    }, { workingDirectory: process.cwd() })
+    expect(todoRunnerLargePayload).not.toBeNull()
+    expect(todoRunnerLargePayload?.lastError ?? '').not.toContain('E2BIG')
 
     const chooseFolderButton = mainWindow.getByRole('button', { name: 'Choose folder' }).first()
     if (await chooseFolderButton.count()) {
