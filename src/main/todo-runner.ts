@@ -98,18 +98,21 @@ const TODO_RUNNER_TICK_MS = 5_000
 const TODO_RUNNER_DEFAULT_MAX_CONCURRENT_JOBS = 2
 const TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000
 const TODO_RUNNER_FORCE_KILL_TIMEOUT_MS = 10_000
+const TODO_RUNNER_DISPATCH_DRAIN_TIMEOUT_MS = 5_000
 const TODO_RUNNER_ENV_VALUE_MAX_CHARS = 2_048
 const TODO_MAX_ATTEMPTS = 3
 
 let handlersRegistered = false
 let todoRunnerTimer: NodeJS.Timeout | null = null
 let tickInFlight = false
+let todoRunnerShuttingDown = false
 let jobsCache: TodoRunnerJobRecord[] = []
 let nextJobScanIndex = 0
 
 const runtimeByJobId = new Map<string, TodoRunnerRuntime>()
 const runningProcessByJobId = new Map<string, RunningTodoProcess>()
 const pendingStartByJobId = new Map<string, { todoIndex: number; trigger: TodoRunnerRunTrigger }>()
+const runPromiseByJobId = new Map<string, Promise<void>>()
 const stoppedByUserJobIds = new Set<string>()
 const forceKillTimerByJobId = new Map<string, NodeJS.Timeout>()
 const manualRunRequestedJobIds = new Set<string>()
@@ -153,6 +156,19 @@ function resolveTodoRunnerMaxConcurrentJobs(): number {
   return parsed
 }
 
+function resolveTodoRunnerDispatchDrainTimeoutMs(): number {
+  return resolveManagedRuntimeMs({
+    envVarName: 'AGENT_SPACE_TODO_RUNNER_DISPATCH_DRAIN_TIMEOUT_MS',
+    defaultMs: TODO_RUNNER_DISPATCH_DRAIN_TIMEOUT_MS,
+    onInvalidConfig: (rawValue, fallbackMs) => {
+      logMainEvent('todo_runner.cleanup.invalid_dispatch_drain_timeout_config', {
+        rawValue,
+        fallbackMs,
+      }, 'warn')
+    },
+  })
+}
+
 export function __testOnlyComputeTodoRunnerAvailableSlots(
   maxConcurrentJobs: number,
   runningJobs: number,
@@ -162,14 +178,61 @@ export function __testOnlyComputeTodoRunnerAvailableSlots(
 }
 
 export function __testOnlyIsTodoJobDispatchEligible(isRunning: boolean, isPendingStart: boolean): boolean {
-  return !(isRunning || isPendingStart)
+  return __testOnlyCanDispatchTodoRun(false, false, isRunning, isPendingStart)
+}
+
+export function __testOnlyCanDispatchTodoRun(
+  isShuttingDown: boolean,
+  hasRunPromiseInFlight: boolean,
+  isRunning: boolean,
+  isPendingStart: boolean
+): boolean {
+  return !(isShuttingDown || hasRunPromiseInFlight || isRunning || isPendingStart)
 }
 
 function isJobDispatchEligible(jobId: string): boolean {
-  return __testOnlyIsTodoJobDispatchEligible(
+  return __testOnlyCanDispatchTodoRun(
+    todoRunnerShuttingDown,
+    runPromiseByJobId.has(jobId),
     runningProcessByJobId.has(jobId),
     pendingStartByJobId.has(jobId)
   )
+}
+
+export async function __testOnlyWaitForTodoRunPromises(
+  runPromises: Promise<void>[],
+  timeoutMs: number
+): Promise<{ drained: boolean; pendingCount: number }> {
+  if (runPromises.length === 0) {
+    return { drained: true, pendingCount: 0 }
+  }
+
+  let timeoutHandle: NodeJS.Timeout | null = null
+  let timedOut = false
+  try {
+    await Promise.race([
+      Promise.allSettled(runPromises).then(() => undefined),
+      new Promise<void>((resolve) => {
+        timeoutHandle = setTimeout(() => {
+          timedOut = true
+          resolve()
+        }, Math.max(1, timeoutMs))
+      }),
+    ])
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle)
+    }
+  }
+
+  return {
+    drained: !timedOut,
+    pendingCount: timedOut ? runPromises.length : 0,
+  }
+}
+
+async function waitForInFlightTodoRuns(timeoutMs: number): Promise<{ drained: boolean; pendingCount: number }> {
+  return __testOnlyWaitForTodoRunPromises([...runPromiseByJobId.values()], timeoutMs)
 }
 
 function reservePendingStart(jobId: string, todoIndex: number, trigger: TodoRunnerRunTrigger): boolean {
@@ -699,6 +762,10 @@ function buildRunnerPayload(job: TodoRunnerJobRecord, todo: TodoItemState, todoI
 }
 
 async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: TodoRunnerRunTrigger): Promise<void> {
+  if (todoRunnerShuttingDown) {
+    releasePendingStart(job.id)
+    return
+  }
   if (runningProcessByJobId.has(job.id)) {
     releasePendingStart(job.id)
     return
@@ -735,6 +802,11 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
     job.enabled = false
     writeJobsToDisk(jobsCache)
     broadcastTodoRunnerUpdate()
+    return
+  }
+
+  if (todoRunnerShuttingDown) {
+    releasePendingStart(job.id)
     return
   }
 
@@ -989,6 +1061,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
 }
 
 async function todoRunnerTick(): Promise<void> {
+  if (todoRunnerShuttingDown) return
   if (tickInFlight) return
   tickInFlight = true
   try {
@@ -1044,7 +1117,7 @@ async function todoRunnerTick(): Promise<void> {
 
       nextJobScanIndex = (index + 1) % jobCount
       startedCount += 1
-      void runTodo(job, nextIndex, trigger).catch((err) => {
+      const runPromise = runTodo(job, nextIndex, trigger).catch((err) => {
         releasePendingStart(job.id)
         logMainError('todo_runner.todo.run_failed', err, {
           jobId: job.id,
@@ -1052,7 +1125,10 @@ async function todoRunnerTick(): Promise<void> {
           todoIndex: nextIndex,
           trigger,
         })
+      }).finally(() => {
+        runPromiseByJobId.delete(job.id)
       })
+      runPromiseByJobId.set(job.id, runPromise)
     }
   } finally {
     tickInFlight = false
@@ -1074,6 +1150,7 @@ function startTodoRunnerLoop(): void {
 }
 
 export function setupTodoRunnerHandlers(): void {
+  todoRunnerShuttingDown = false
   loadJobsCache()
   startTodoRunnerLoop()
 
@@ -1111,9 +1188,32 @@ export function setupTodoRunnerHandlers(): void {
 }
 
 export async function cleanupTodoRunner(): Promise<void> {
+  todoRunnerShuttingDown = true
   if (todoRunnerTimer) {
     clearInterval(todoRunnerTimer)
     todoRunnerTimer = null
+  }
+  tickInFlight = false
+
+  const dispatchDrainTimeoutMs = resolveTodoRunnerDispatchDrainTimeoutMs()
+  const inFlightRunCount = runPromiseByJobId.size
+  if (inFlightRunCount > 0) {
+    logMainEvent('todo_runner.cleanup.await_dispatches.start', {
+      inFlightRunCount,
+      timeoutMs: dispatchDrainTimeoutMs,
+    })
+
+    const dispatchDrain = await waitForInFlightTodoRuns(dispatchDrainTimeoutMs)
+    if (!dispatchDrain.drained) {
+      logMainEvent('todo_runner.cleanup.await_dispatches.timeout', {
+        timeoutMs: dispatchDrainTimeoutMs,
+        pendingRunCount: dispatchDrain.pendingCount,
+      }, 'warn')
+    } else {
+      logMainEvent('todo_runner.cleanup.await_dispatches.completed', {
+        awaitedRunCount: inFlightRunCount,
+      })
+    }
   }
 
   const runningEntries = Array.from(runningProcessByJobId.entries())
@@ -1166,6 +1266,7 @@ export async function cleanupTodoRunner(): Promise<void> {
 
   runningProcessByJobId.clear()
   pendingStartByJobId.clear()
+  runPromiseByJobId.clear()
   manualRunRequestedJobIds.clear()
   nextJobScanIndex = 0
 }
