@@ -3,10 +3,42 @@ import os from 'os'
 import path from 'path'
 import { test, expect, _electron as electron } from '@playwright/test'
 
+interface SmokeSchedulerTask {
+  id: string
+  enabled: boolean
+  lastStatus: string
+  lastError: string | null
+  nextRunAt: number | null
+}
+
 test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', async () => {
   let tempFolder: string | null = null
   let tempUserDataDir: string | null = null
+  let tempSchedulerHomeDir: string | null = null
   tempUserDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-observer-userdata-'))
+  tempSchedulerHomeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-observer-home-'))
+
+  const invalidCronTaskId = 'smoke-invalid-persisted-cron'
+  const schedulerDir = path.join(tempSchedulerHomeDir, '.agent-observer')
+  const schedulerFile = path.join(schedulerDir, 'schedules.json')
+  const now = Date.now()
+  await fs.mkdir(schedulerDir, { recursive: true })
+  await fs.writeFile(
+    schedulerFile,
+    JSON.stringify([
+      {
+        id: invalidCronTaskId,
+        name: 'Smoke invalid cron',
+        cron: '61 * * * *',
+        prompt: 'smoke',
+        workingDirectory: process.cwd(),
+        enabled: true,
+        yoloMode: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ], null, 2)
+  )
 
   const electronApp = await electron.launch({
     cwd: process.cwd(),
@@ -15,6 +47,8 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
       ...process.env,
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       AGENT_SPACE_USER_DATA_DIR: tempUserDataDir,
+      HOME: tempSchedulerHomeDir,
+      USERPROFILE: tempSchedulerHomeDir,
     },
   })
 
@@ -28,6 +62,31 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
     }
 
     await expect(mainWindow.locator('.slot-tab', { hasText: 'CHAT' }).first()).toBeVisible()
+
+    // Regression check: malformed persisted cron tasks should be surfaced as
+    // actionable errors and auto-disabled on load.
+    const schedulerTasks = await mainWindow.evaluate(async () => {
+      const api = (window as unknown as {
+        electronAPI: { scheduler: { list: () => Promise<unknown> } }
+      }).electronAPI
+      return (await api.scheduler.list()) as SmokeSchedulerTask[]
+    })
+    const invalidCronTask = schedulerTasks.find((task) => task.id === invalidCronTaskId)
+    expect(invalidCronTask).toBeDefined()
+    expect(invalidCronTask?.enabled).toBe(false)
+    expect(invalidCronTask?.lastStatus).toBe('error')
+    expect(invalidCronTask?.lastError).toContain('Invalid cron expression:')
+    expect(invalidCronTask?.lastError).toContain('61 * * * *')
+    expect(invalidCronTask?.lastError).toContain('(task disabled)')
+    expect(invalidCronTask?.nextRunAt).toBeNull()
+    await expect
+      .poll(async () => {
+        const persistedRaw = await fs.readFile(schedulerFile, 'utf-8')
+        const persisted = JSON.parse(persistedRaw) as Array<{ id: string; enabled: boolean }>
+        return persisted.find((task) => task.id === invalidCronTaskId)?.enabled
+      })
+      .toBe(false)
+
     const chooseFolderButton = mainWindow.getByRole('button', { name: 'Choose folder' }).first()
     if (await chooseFolderButton.count()) {
       await expect(chooseFolderButton).toBeVisible()
@@ -216,6 +275,9 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
     }
     if (tempUserDataDir) {
       await fs.rm(tempUserDataDir, { recursive: true, force: true }).catch(() => {})
+    }
+    if (tempSchedulerHomeDir) {
+      await fs.rm(tempSchedulerHomeDir, { recursive: true, force: true }).catch(() => {})
     }
     await electronApp.close()
   }

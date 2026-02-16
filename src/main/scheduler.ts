@@ -70,6 +70,7 @@ const SCHEDULER_DIR = path.join(os.homedir(), '.agent-observer')
 const SCHEDULER_FILE = path.join(SCHEDULER_DIR, 'schedules.json')
 const SCHEDULER_MAX_SCAN_MINUTES = 366 * 24 * 60
 const SCHEDULER_TICK_MS = 10_000
+const INVALID_CRON_ERROR_PREFIX = 'Invalid cron expression:'
 
 let handlersRegistered = false
 let schedulerTimer: NodeJS.Timeout | null = null
@@ -78,6 +79,7 @@ let tasksCache: SchedulerTask[] = []
 const runtimeByTaskId = new Map<string, SchedulerTaskRuntime>()
 const runningProcessByTaskId = new Map<string, ChildProcess>()
 const cronParseCache = new Map<string, ParsedCron>()
+const loadValidationErrorsByTaskId = new Map<string, string>()
 
 function createRuntime(): SchedulerTaskRuntime {
   return {
@@ -292,11 +294,14 @@ function readTasksFromDisk(): SchedulerTask[] {
   if (!fs.existsSync(SCHEDULER_FILE)) return []
 
   try {
+    cronParseCache.clear()
+    loadValidationErrorsByTaskId.clear()
     const raw = fs.readFileSync(SCHEDULER_FILE, 'utf-8')
     const parsed = JSON.parse(raw) as unknown
     if (!Array.isArray(parsed)) return []
 
     const tasks: SchedulerTask[] = []
+    let changed = false
     for (const item of parsed) {
       if (!item || typeof item !== 'object') continue
       const obj = item as Record<string, unknown>
@@ -319,6 +324,14 @@ function readTasksFromDisk(): SchedulerTask[] {
       const parsedCron = parseCronExpression(normalized.cron)
       if (parsedCron) {
         cronParseCache.set(normalized.cron, parsedCron)
+      } else {
+        loadValidationErrorsByTaskId.set(candidate.id, `${INVALID_CRON_ERROR_PREFIX} ${normalized.cron}`)
+        logMainEvent('scheduler.task.invalid_cron', {
+          taskId: candidate.id,
+          taskName: normalized.name,
+          cron: normalized.cron,
+        }, 'warn')
+        if (normalized.enabled) changed = true
       }
 
       tasks.push({
@@ -327,9 +340,13 @@ function readTasksFromDisk(): SchedulerTask[] {
         cron: normalized.cron,
         prompt: normalized.prompt,
         workingDirectory: normalized.workingDirectory,
-        enabled: normalized.enabled,
+        enabled: parsedCron ? normalized.enabled : false,
         yoloMode: normalized.yoloMode,
       })
+    }
+
+    if (changed) {
+      writeTasksToDisk(tasks)
     }
 
     return tasks
@@ -347,9 +364,20 @@ function writeTasksToDisk(tasks: SchedulerTask[]): void {
 function loadTasksCache(): void {
   tasksCache = readTasksFromDisk()
   for (const task of tasksCache) {
-    if (!runtimeByTaskId.has(task.id)) {
-      runtimeByTaskId.set(task.id, createRuntime())
+    const runtime = runtimeByTaskId.get(task.id) ?? createRuntime()
+    const validationError = loadValidationErrorsByTaskId.get(task.id)
+    if (validationError) {
+      runtime.lastStatus = 'error'
+      runtime.lastError = `${validationError} (task disabled)`
+      runtime.lastDurationMs = null
+      runtime.lastRunTrigger = null
+    } else if (runtime.lastError?.startsWith(INVALID_CRON_ERROR_PREFIX)) {
+      runtime.lastStatus = 'idle'
+      runtime.lastError = null
+      runtime.lastDurationMs = null
+      runtime.lastRunTrigger = null
     }
+    runtimeByTaskId.set(task.id, runtime)
   }
 }
 
@@ -402,7 +430,16 @@ function upsertTask(input: SchedulerTaskInput): SchedulerTaskWithRuntime {
       updatedAt: now,
     }
     tasksCache[existingIndex] = updated
+    loadValidationErrorsByTaskId.delete(updated.id)
     writeTasksToDisk(tasksCache)
+    const runtime = runtimeByTaskId.get(updated.id) ?? createRuntime()
+    if (runtime.lastError?.startsWith(INVALID_CRON_ERROR_PREFIX)) {
+      runtime.lastStatus = 'idle'
+      runtime.lastError = null
+      runtime.lastDurationMs = null
+      runtime.lastRunTrigger = null
+    }
+    runtimeByTaskId.set(updated.id, runtime)
     broadcastSchedulerUpdate()
     return toTaskWithRuntime(updated)
   }
@@ -419,6 +456,7 @@ function upsertTask(input: SchedulerTaskInput): SchedulerTaskWithRuntime {
     updatedAt: now,
   }
   tasksCache = [...tasksCache, task]
+  loadValidationErrorsByTaskId.delete(task.id)
   runtimeByTaskId.set(task.id, createRuntime())
   writeTasksToDisk(tasksCache)
   broadcastSchedulerUpdate()
@@ -430,6 +468,7 @@ function deleteTask(taskId: string): void {
 
   tasksCache = tasksCache.filter((task) => task.id !== taskId)
   runtimeByTaskId.delete(taskId)
+  loadValidationErrorsByTaskId.delete(taskId)
   cronParseCache.clear()
 
   const runningProc = runningProcessByTaskId.get(taskId)
