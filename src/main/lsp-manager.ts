@@ -72,7 +72,7 @@ interface ActiveServer {
   process: ChildProcess
   initialized: boolean
   /** Buffer for incomplete JSON-RPC messages */
-  buffer: string
+  buffer: Buffer
 }
 
 const activeServers = new Map<string, ActiveServer>()
@@ -86,29 +86,33 @@ function encodeMessage(msg: unknown): string {
   return `Content-Length: ${Buffer.byteLength(body, 'utf-8')}\r\n\r\n${body}`
 }
 
-function parseMessages(buffer: string): { messages: unknown[]; remaining: string } {
+function parseMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer } {
   const messages: unknown[] = []
-  let remaining = buffer
+  let cursor = 0
 
   while (true) {
-    const headerEnd = remaining.indexOf('\r\n\r\n')
+    const headerEnd = buffer.indexOf('\r\n\r\n', cursor, 'utf-8')
     if (headerEnd === -1) break
 
-    const header = remaining.slice(0, headerEnd)
+    const header = buffer.subarray(cursor, headerEnd).toString('ascii')
     const match = /Content-Length:\s*(\d+)/i.exec(header)
+    const bodyStart = headerEnd + 4
     if (!match) {
-      remaining = remaining.slice(headerEnd + 4)
+      cursor = bodyStart
       continue
     }
 
-    const contentLength = parseInt(match[1], 10)
-    const bodyStart = headerEnd + 4
+    const contentLength = Number.parseInt(match[1], 10)
+    if (!Number.isFinite(contentLength) || contentLength < 0) {
+      cursor = bodyStart
+      continue
+    }
     const bodyEnd = bodyStart + contentLength
 
-    if (remaining.length < bodyEnd) break
+    if (buffer.length < bodyEnd) break
 
-    const body = remaining.slice(bodyStart, bodyEnd)
-    remaining = remaining.slice(bodyEnd)
+    const body = buffer.subarray(bodyStart, bodyEnd).toString('utf-8')
+    cursor = bodyEnd
 
     try {
       messages.push(JSON.parse(body))
@@ -117,7 +121,10 @@ function parseMessages(buffer: string): { messages: unknown[]; remaining: string
     }
   }
 
-  return { messages, remaining }
+  return {
+    messages,
+    remaining: cursor === 0 ? buffer : buffer.subarray(cursor),
+  }
 }
 
 // ── Server lifecycle ─────────────────────────────────────────────────
@@ -165,11 +172,11 @@ function getOrStartServer(languageId: string): ActiveServer | null {
       config,
       process: proc,
       initialized: false,
-      buffer: '',
+      buffer: Buffer.alloc(0),
     }
 
     proc.stdout?.on('data', (chunk: Buffer) => {
-      server.buffer += chunk.toString('utf-8')
+      server.buffer = Buffer.concat([server.buffer, chunk])
       const { messages, remaining } = parseMessages(server.buffer)
       server.buffer = remaining
 
