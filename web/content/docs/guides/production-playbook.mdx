@@ -115,6 +115,34 @@ Track:
 
 Use this review to tighten prompts, runner contracts, and scope defaults.
 
+## Install Telemetry Data Quality Runbook
+
+Use this runbook to validate production install-count accuracy.
+
+### Daily Checks
+
+1. Verify `GET /api/world-state` returns `installSource.kind = production` when production mode is enabled.
+2. Verify `installCount` is non-decreasing unless retention policy intentionally prunes old records.
+3. Verify ingest success ratio from `POST /api/install-beacon` is healthy (`202` expected, `429` monitored).
+4. Verify duplicate ingestion does not increase `uniqueInstallCount`.
+
+### Drift / Incident Checks
+
+1. Post the same beacon payload twice and verify the second response has `duplicate: true`.
+2. Post a malformed payload and verify schema rejection (`400`).
+3. Burst test one installation hash and verify rate-limit behavior (`429` with `Retry-After`).
+4. Confirm aggregate store path and write permissions for `AGENT_OBSERVER_INSTALL_BEACON_STORE_FILE`.
+
+### Release Gate
+
+Before shipping telemetry changes:
+
+1. Run `tests/smoke/install-beacon.spec.ts`.
+2. Run `tests/smoke/install-beacon-backend.spec.ts`.
+3. Confirm `reference/install-telemetry` is updated.
+4. Confirm `reference/world-state-api` is updated.
+5. Confirm `reference/troubleshooting` is updated.
+
 ## Suggested Team Ownership
 
 - **Doc owner**: updates runbooks after feature changes

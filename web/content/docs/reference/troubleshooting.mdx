@@ -92,6 +92,16 @@ If one chat appears as multiple office agents:
 2. Restart app.
 3. Reopen one chat and confirm single active thread.
 
+## Install Count Not Increasing In Production Mode
+
+1. Confirm desktop **Settings -> Diagnostics -> Anonymous install beacon** is enabled.
+2. Confirm backend has `AGENT_OBSERVER_WORLD_INSTALL_SOURCE=production`.
+3. Confirm ingest endpoint is reachable (`POST /api/install-beacon`).
+4. Confirm rate limits are not being hit (`429` with `Retry-After`).
+5. Confirm backend aggregate store path is configured as expected (`AGENT_OBSERVER_INSTALL_BEACON_STORE_FILE`).
+
+If beacon opt-out is enabled, this installation will not contribute to production install count.
+
 ## If You Need A Clean Baseline
 
 1. Close extra tabs/runs.

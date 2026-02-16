@@ -5,6 +5,7 @@
     "permissions",
     "status-model",
     "ipc-api",
+    "install-telemetry",
     "world-state-api",
     "troubleshooting",
     "docs-style-guide"

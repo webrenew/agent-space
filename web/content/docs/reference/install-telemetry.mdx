@@ -1,0 +1,62 @@
+---
+title: Install Telemetry
+description: Privacy disclosure, payload contract, retention, and opt-out behavior for install-count telemetry.
+---
+
+# Install Telemetry
+
+Agent Observer uses an anonymous install beacon to power install-driven world growth tiers.
+
+## What Is Collected
+
+Beacon payload (`POST /api/install-beacon`):
+
+- `installation_id_hash`: SHA-256 hash of a locally generated random installation ID
+- `app_version`: desktop app version string (example: `1.2.0`)
+- `first_seen_at`: ISO timestamp from the installation's first launch
+
+## Why It Is Collected
+
+- dedupe unique installs for world-state progression
+- measure aggregate install growth without storing personal identifiers
+- detect ingest health and data quality issues
+
+## What Is Not Collected
+
+- no raw installation ID in backend ingest payload
+- no usernames, emails, prompts, workspace paths, or file contents
+- no persisted source IPs in install aggregate storage
+
+## Retention Policy
+
+Desktop local files:
+
+- `~/.agent-observer/install-beacon.json`: stores local installation ID and beacon delivery state
+
+Backend aggregate store:
+
+- stores deduped hashed installation records and first/last seen timestamps
+- persistence path is controlled by `AGENT_OBSERVER_INSTALL_BEACON_STORE_FILE`
+- if unset, default storage path is `/tmp/agent-observer-install-beacon-store.json`
+
+Rate limiting data:
+
+- source-IP and installation hash buckets are in-memory only
+- buckets are short-lived and automatically pruned
+
+## Opt-Out
+
+In desktop app:
+
+1. Open **Settings**
+2. Go to **Diagnostics**
+3. Disable **Anonymous install beacon**
+
+When disabled, new install beacons are not sent from that app instance.
+
+## Verification
+
+Opt-out and idempotency behavior are covered by smoke tests:
+
+- `tests/smoke/install-beacon.spec.ts`
+- `tests/smoke/install-beacon-backend.spec.ts`
