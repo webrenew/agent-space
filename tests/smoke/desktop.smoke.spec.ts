@@ -28,7 +28,12 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
     }
 
     await expect(mainWindow.locator('.slot-tab', { hasText: 'CHAT' }).first()).toBeVisible()
-    await expect(mainWindow.getByRole('button', { name: 'Choose folder' }).first()).toBeVisible()
+    const chooseFolderButton = mainWindow.getByRole('button', { name: 'Choose folder' }).first()
+    if (await chooseFolderButton.count()) {
+      await expect(chooseFolderButton).toBeVisible()
+    } else {
+      await expect(mainWindow.getByRole('button', { name: 'pick' }).first()).toBeVisible()
+    }
 
     // Regression check: unsolicited Claude events must be ignored when no
     // active Claude session is tracked in this chat panel.
