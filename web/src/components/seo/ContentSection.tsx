@@ -1,4 +1,4 @@
-import { AGENT_SPACE_RELEASES_URL } from "@/lib/downloads";
+import { AGENT_SPACE_INSTALLER_URL } from "@/lib/downloads";
 import Link from "next/link";
 
 const FEATURES = [
@@ -277,15 +277,13 @@ export function ContentSection() {
               maxWidth: 880,
             }}
           >
-            Get the latest desktop release from GitHub, open the DMG, and drag
-            Agent Observer into your Applications folder.
+            Download the latest installer directly from this site, open the DMG,
+            and drag Agent Observer into your Applications folder.
           </p>
 
           <div className="flex flex-wrap items-center gap-8">
             <a
-              href={AGENT_SPACE_RELEASES_URL}
-              target="_blank"
-              rel="noreferrer"
+              href={AGENT_SPACE_INSTALLER_URL}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -320,7 +318,7 @@ export function ContentSection() {
               lineHeight: 1.6,
             }}
           >
-            <li>Open the latest release page and download the `.dmg` installer.</li>
+            <li>Use the website installer link to download the latest `.dmg`.</li>
             <li>Open the DMG, then drag Agent Observer into `Applications`.</li>
             <li>Launch Agent Observer from Applications and approve requested permissions.</li>
           </ol>

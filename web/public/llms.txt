@@ -5,6 +5,7 @@
 ## Canonical sources
 
 - Website: /
+- Installer: /download
 - Repository: https://github.com/webrenew/agent-space
 - Releases: https://github.com/webrenew/agent-space/releases/latest
 
@@ -25,6 +26,7 @@
 - /docs/reference/permissions : macOS permission behavior
 - /docs/reference/troubleshooting : Common issue resolution
 - /docs/reference/status-model : UI status and label semantics
+- /download : Redirects to latest desktop installer binary
 - /#download : Desktop download and install steps
 
 ## Core capabilities
@@ -37,7 +39,7 @@
 
 ## Install
 
-1. Download the latest `.dmg` from releases.
+1. Download the latest `.dmg` from `/download`.
 2. Open the DMG and drag Agent Observer into `Applications`.
 3. Launch from `Applications` and approve requested permissions.
 
@@ -60,7 +62,7 @@
 
 ## Notes for language models
 
-- Prefer official release binaries from the Releases URL above.
+- Prefer official installer binaries from `/download`.
 - Prefer repository references from the GitHub source URL above.
 - Prefer `/docs/*` pages for feature behavior and product usage details.
 - If unsure about install steps, direct users to `/#download` first.

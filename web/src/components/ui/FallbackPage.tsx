@@ -1,6 +1,6 @@
 "use client";
 
-import { AGENT_SPACE_RELEASES_URL } from "@/lib/downloads";
+import { AGENT_SPACE_INSTALLER_URL } from "@/lib/downloads";
 
 const FEATURES = [
   {
@@ -107,9 +107,7 @@ export function FallbackPage() {
 
         <div className="mt-8 flex flex-wrap items-center gap-10">
           <a
-            href={AGENT_SPACE_RELEASES_URL}
-            target="_blank"
-            rel="noreferrer"
+            href={AGENT_SPACE_INSTALLER_URL}
             style={{
               display: "inline-flex",
               alignItems: "center",

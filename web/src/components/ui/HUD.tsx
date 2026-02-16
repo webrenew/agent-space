@@ -6,7 +6,7 @@ import { useDemoStore } from "@/stores/useDemoStore";
 import { STATUS_LABELS, AGENT_COLORS } from "@/types";
 import type { AgentStatus } from "@/types";
 import type { CelebrationType } from "@/types";
-import { AGENT_SPACE_RELEASES_URL } from "@/lib/downloads";
+import { AGENT_SPACE_INSTALLER_URL } from "@/lib/downloads";
 import { setManualAgentOverride } from "@/lib/simulation";
 import { Minimap } from "./Minimap";
 
@@ -1290,9 +1290,7 @@ export function HUD() {
             docs
           </Link>
           <a
-            href={AGENT_SPACE_RELEASES_URL}
-            target="_blank"
-            rel="noreferrer"
+            href={AGENT_SPACE_INSTALLER_URL}
             style={{ color: "#d4a040", fontWeight: 600 }}
           >
             install
