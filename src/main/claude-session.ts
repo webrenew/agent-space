@@ -184,27 +184,29 @@ function emitEvent(event: ClaudeEvent): void {
 
 /**
  * Parse a single JSONL line from the Claude CLI stream-json output.
- * Returns a simplified ClaudeEvent.data or null if unparseable.
+ * Returns zero or more normalized Claude events for the line.
  */
 function parseStreamLine(
   sessionId: string,
   line: string
-): ClaudeEvent | null {
+): ClaudeEvent[] {
   try {
+    const events: ClaudeEvent[] = []
     const obj = JSON.parse(line) as Record<string, unknown>
 
     // system.init event
     if (obj.type === 'system' && obj.subtype === 'init') {
-      return {
+      events.push({
         sessionId,
         type: 'init',
         data: { session_id: (obj.session_id as string) ?? sessionId },
-      }
+      })
+      return events
     }
 
     // result event (final)
     if (obj.type === 'result') {
-      return {
+      events.push({
         sessionId,
         type: 'result',
         data: {
@@ -215,7 +217,8 @@ function parseStreamLine(
           modelUsage: obj.modelUsage as Record<string, unknown> | undefined,
           session_id: (obj.session_id as string) ?? sessionId,
         },
-      }
+      })
+      return events
     }
 
     // assistant / user message with content blocks
@@ -224,10 +227,10 @@ function parseStreamLine(
       const messageUsage = message.usage as Record<string, unknown> | undefined
       const contentBlocks = (message.content ?? []) as Array<Record<string, unknown>>
 
-      // Return the last meaningful content block as an event
+      // Emit all meaningful blocks in order.
       for (const block of contentBlocks) {
         if (block.type === 'tool_use') {
-          return {
+          events.push({
             sessionId,
             type: 'tool_use',
             data: {
@@ -236,14 +239,15 @@ function parseStreamLine(
               input: (block.input ?? {}) as Record<string, unknown>,
               usage: messageUsage,
             },
-          }
+          })
+          continue
         }
 
         if (block.type === 'tool_result') {
           const content = typeof block.content === 'string'
             ? block.content
             : JSON.stringify(block.content ?? '')
-          return {
+          events.push({
             sessionId,
             type: 'tool_result',
             data: {
@@ -252,50 +256,53 @@ function parseStreamLine(
               is_error: block.is_error as boolean | undefined,
               usage: messageUsage,
             },
-          }
+          })
+          continue
         }
 
         if (block.type === 'thinking') {
-          return {
+          events.push({
             sessionId,
             type: 'thinking',
             data: {
               thinking: (block.thinking as string) ?? '',
               usage: messageUsage,
             },
-          }
+          })
+          continue
         }
 
         if (block.type === 'text') {
-          return {
+          events.push({
             sessionId,
             type: 'text',
             data: {
               text: (block.text as string) ?? '',
               usage: messageUsage,
             },
-          }
+          })
         }
       }
+      if (events.length > 0) return events
     }
 
     // Fallback: if it has a content_block with type info
     if (obj.content_block) {
       const block = obj.content_block as Record<string, unknown>
       if (block.type === 'text') {
-        return {
+        events.push({
           sessionId,
           type: 'text',
           data: { text: (block.text as string) ?? '' },
-        }
+        })
       }
     }
 
-    return null
+    return events
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[claude-session] Failed to parse JSONL line: ${message}`)
-    return null
+    return []
   }
 }
 
@@ -395,8 +402,8 @@ function startSession(options: ClaudeSessionOptions): string {
     const trimmed = line.trim()
     if (!trimmed) return
 
-    const event = parseStreamLine(sessionId, trimmed)
-    if (event) {
+    const events = parseStreamLine(sessionId, trimmed)
+    for (const event of events) {
       emitEvent(event)
     }
   })
