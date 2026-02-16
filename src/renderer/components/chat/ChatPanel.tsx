@@ -20,12 +20,15 @@ import {
 } from '../../plugins/runtime'
 import { ChatMessageBubble } from './ChatMessage'
 import { ChatInput } from './ChatInput'
+import {
+  createClaudeEventHandlerRegistry,
+  routeClaudeEvent,
+  type SessionStatus,
+} from './claudeEventHandlers'
 
 interface ChatPanelProps {
   chatSessionId: string
 }
-
-type SessionStatus = 'idle' | 'running' | 'done' | 'error'
 
 const BINARY_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg', 'tiff', 'psd',
@@ -366,6 +369,12 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
     }
   }, [removeAgent])
 
+  const incrementAgentFileCount = useCallback((agentId: string) => {
+    const current = useAgentStore.getState().agents.find((agent) => agent.id === agentId)
+    if (!current) return
+    updateAgent(agentId, { files_modified: current.files_modified + 1 })
+  }, [updateAgent])
+
   const applyUsageSnapshot = useCallback(
     (agentId: string, usageValue: unknown, modelUsageValue: unknown) => {
       const snapshot = parseUsageSnapshot(usageValue, modelUsageValue)
@@ -488,6 +497,14 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
     void emitPluginHook('agent_end', agentEndPayload)
   }, [addEvent, addReward, chatSession?.label, chatSessionId, workingDir])
 
+  const resetRunState = useCallback(() => {
+    setActiveClaudeSession(null)
+    activeRunDirectoryRef.current = null
+    runTokenBaselineRef.current = null
+    runModelBaselineRef.current = null
+    runStartedAtRef.current = null
+  }, [setActiveClaudeSession])
+
   // Keep chat session directory synced to workspace until the first message.
   // User-picked custom dirs are never overwritten by sidebar folder changes.
   useEffect(() => {
@@ -594,6 +611,34 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
 
   // Handle incoming Claude events
   useEffect(() => {
+    const eventHandlers = createClaudeEventHandlerRegistry({
+      chatSessionId,
+      workingDirectory: workingDir ?? null,
+      getAgentId: () => agentIdRef.current,
+      getActiveRunDirectory: () => activeRunDirectoryRef.current,
+      setMessages,
+      setStatus,
+      updateAgent,
+      addEvent,
+      addAgent,
+      removeAgent,
+      clearSubagentsForParent,
+      emitPluginHook,
+      persistMessage,
+      finalizeRunReward,
+      resetRunState,
+      playCompletionDing: () => playChatCompletionDing(soundsEnabled),
+      nextMessageId,
+      truncateForHook,
+      runToolCallCountRef,
+      runFileWriteCountRef,
+      subagentSeatCounterRef: subagentSeatCounter,
+      activeSubagents: activeSubagents.current,
+      activeToolNames: activeToolNames.current,
+      incrementAgentFileCount,
+      getChatAgentName: () => `Chat ${chatAgentCounter}`,
+    })
+
     const unsub = window.electronAPI.claude.onEvent((event: ClaudeEvent) => {
       const activeSessionId = activeClaudeSessionIdRef.current
       if (!activeSessionId || event.sessionId !== activeSessionId) return
@@ -603,321 +648,25 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
         const usagePayload = event.data as { usage?: unknown; modelUsage?: unknown }
         applyUsageSnapshot(agentId, usagePayload.usage, usagePayload.modelUsage)
       }
-
-      switch (event.type) {
-        case 'init': {
-          if (agentId) {
-            updateAgent(agentId, { status: 'thinking' })
-          }
-          break
-        }
-
-        case 'text': {
-          const data = event.data as { text: string }
-          if (!data.text) break
-
-          setMessages((prev) => {
-            // Merge consecutive assistant text messages
-            const last = prev[prev.length - 1]
-            if (last && last.role === 'assistant' && !last.toolName) {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, content: last.content + data.text },
-              ]
-            }
-            return [
-              ...prev,
-              {
-                id: nextMessageId(),
-                role: 'assistant',
-                content: data.text,
-                timestamp: Date.now(),
-              },
-            ]
-          })
-
-          if (agentId) {
-            updateAgent(agentId, { status: 'streaming' })
-          }
-          break
-        }
-
-        case 'thinking': {
-          const data = event.data as { thinking: string }
-          setMessages((prev) => {
-            const withoutThinking = prev.filter((m) => m.role !== 'thinking')
-            return [
-              ...withoutThinking,
-              {
-                id: nextMessageId(),
-                role: 'thinking',
-                content: data.thinking?.slice(0, 200) ?? 'Thinking...',
-                timestamp: Date.now(),
-              },
-            ]
-          })
-
-          if (agentId) {
-            updateAgent(agentId, { status: 'thinking' })
-          }
-          break
-        }
-
-        case 'tool_use': {
-          const data = event.data as { id: string; name: string; input: Record<string, unknown> }
-          runToolCallCountRef.current += 1
-          activeToolNames.current.set(data.id, data.name)
-          void emitPluginHook('before_tool_call', {
-            chatSessionId,
-            workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
-            agentId,
-            timestamp: Date.now(),
-            toolName: data.name,
-            toolUseId: data.id,
-            toolInput: data.input,
-          })
-          setMessages((prev) => [
-            ...prev.filter((m) => m.role !== 'thinking'),
-            {
-              id: nextMessageId(),
-              role: 'assistant',
-              content: '',
-              timestamp: Date.now(),
-              toolName: data.name,
-              toolInput: data.input,
-              toolUseId: data.id,
-            },
-          ])
-
-          if (agentId) {
-            updateAgent(agentId, { status: 'tool_calling', currentTask: data.name })
-            addEvent({
-              agentId,
-              agentName: `Chat ${chatAgentCounter}`,
-              type: 'tool_call',
-              description: `${data.name}`,
-            })
-
-            // Track file modifications
-            const fileTools = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']
-            if (fileTools.includes(data.name)) {
-              runFileWriteCountRef.current += 1
-              const current = useAgentStore.getState().agents.find((a) => a.id === agentId)
-              if (current) {
-                updateAgent(agentId, { files_modified: current.files_modified + 1 })
-              }
-            }
-
-            // Detect subagent spawns (Task tool = Claude spawning a subagent)
-            if (data.name === 'Task') {
-              const subId = `sub-${agentId}-${data.id}`
-              const seat = subagentSeatCounter.current++
-              const subDescription = (data.input?.description as string) ?? (data.input?.prompt as string)?.slice(0, 60) ?? 'Subtask'
-              const subType = (data.input?.subagent_type as string) ?? 'general'
-
-              activeSubagents.current.set(data.id, subId)
-              addAgent({
-                id: subId,
-                name: subType.charAt(0).toUpperCase() + subType.slice(1),
-                agent_type: 'mcp',
-                status: 'thinking',
-                currentTask: subDescription.slice(0, 60),
-                model: '',
-                tokens_input: 0,
-                tokens_output: 0,
-                files_modified: 0,
-                started_at: Date.now(),
-                deskIndex: -1,
-                terminalId: subId,
-                isClaudeRunning: true,
-                appearance: randomAppearance(),
-                commitCount: 0,
-                activeCelebration: null,
-                celebrationStartedAt: null,
-                sessionStats: { tokenHistory: [], peakInputRate: 0, peakOutputRate: 0, tokensByModel: {} },
-                isSubagent: true,
-                parentAgentId: agentId,
-                meetingSeat: seat,
-              })
-
-              addEvent({
-                agentId: subId,
-                agentName: subType,
-                type: 'spawn',
-                description: `Subagent: ${subDescription.slice(0, 40)}`,
-              })
-            }
-          }
-          break
-        }
-
-        case 'tool_result': {
-          const data = event.data as { tool_use_id: string; content: string; is_error?: boolean }
-          const toolName = activeToolNames.current.get(data.tool_use_id) ?? null
-          activeToolNames.current.delete(data.tool_use_id)
-          void emitPluginHook('after_tool_call', {
-            chatSessionId,
-            workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
-            agentId,
-            timestamp: Date.now(),
-            toolUseId: data.tool_use_id,
-            isError: data.is_error === true,
-            contentPreview: truncateForHook(data.content, 240),
-          })
-          void emitPluginHook('tool_result_persist', {
-            chatSessionId,
-            workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
-            agentId,
-            timestamp: Date.now(),
-            toolName,
-            toolUseId: data.tool_use_id,
-            isError: data.is_error === true,
-            contentPreview: truncateForHook(data.content, 240),
-            contentLength: data.content.length,
-          })
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: nextMessageId(),
-              role: 'tool',
-              content: data.content,
-              timestamp: Date.now(),
-              toolUseId: data.tool_use_id,
-              isError: data.is_error,
-            },
-          ])
-
-          // Complete subagent if this result is for a Task tool
-          const subId = activeSubagents.current.get(data.tool_use_id)
-          if (subId) {
-            updateAgent(subId, {
-              status: data.is_error ? 'error' : 'done',
-              isClaudeRunning: false,
-            })
-            activeSubagents.current.delete(data.tool_use_id)
-
-            // Remove subagent after a brief delay to show completion
-            setTimeout(() => {
-              removeAgent(subId)
-            }, 5000)
-          }
-
-          if (agentId) {
-            updateAgent(agentId, { status: 'streaming' })
-          }
-          break
-        }
-
-        case 'result': {
-          const data = event.data as { result: string; is_error?: boolean; error?: string }
-
-          // Remove any lingering thinking messages
-          setMessages((prev) => prev.filter((m) => m.role !== 'thinking'))
-
-          // Persist the final assistant response to memories (outside setState)
-          setMessages((prev) => {
-            const assistantMessages = prev.filter((m) => m.role === 'assistant' && !m.toolName)
-            const lastAssistant = assistantMessages[assistantMessages.length - 1]
-            if (lastAssistant?.content) {
-              // Schedule persist outside React's batch update
-              const activeRunDir = activeRunDirectoryRef.current
-              queueMicrotask(() => {
-                persistMessage(lastAssistant.content, 'assistant', { directory: activeRunDir })
-                void emitPluginHook('message_sent', {
-                  chatSessionId,
-                  workspaceDirectory: activeRunDir ?? workingDir ?? null,
-                  agentId,
-                  timestamp: Date.now(),
-                  role: 'assistant',
-                  message: truncateForHook(lastAssistant.content),
-                  messageLength: lastAssistant.content.length,
-                })
-              })
-            }
-            return prev
-          })
-
-          if (data.is_error && data.error) {
-            void emitPluginHook('message_sent', {
-              chatSessionId,
-              workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
-              agentId,
-              timestamp: Date.now(),
-              role: 'error',
-              message: truncateForHook(data.error),
-              messageLength: data.error.length,
-            })
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: nextMessageId(),
-                role: 'error',
-                content: data.error ?? 'Unknown error',
-                timestamp: Date.now(),
-              },
-            ])
-            setStatus('error')
-          } else {
-            setStatus('done')
-            playChatCompletionDing(soundsEnabled)
-          }
-
-          if (agentId) {
-            updateAgent(agentId, {
-              status: data.is_error ? 'error' : 'done',
-              isClaudeRunning: false,
-            })
-            clearSubagentsForParent(agentId)
-          }
-          finalizeRunReward(data.is_error ? 'error' : 'success')
-
-          setActiveClaudeSession(null)
-          activeRunDirectoryRef.current = null
-          runTokenBaselineRef.current = null
-          runModelBaselineRef.current = null
-          runStartedAtRef.current = null
-          break
-        }
-
-        case 'error': {
-          const data = event.data as { message: string }
-          void emitPluginHook('message_sent', {
-            chatSessionId,
-            workspaceDirectory: activeRunDirectoryRef.current ?? workingDir ?? null,
-            agentId,
-            timestamp: Date.now(),
-            role: 'error',
-            message: truncateForHook(data.message),
-            messageLength: data.message.length,
-          })
-          setMessages((prev) => [
-            ...prev.filter((m) => m.role !== 'thinking'),
-            {
-              id: nextMessageId(),
-              role: 'error',
-              content: data.message,
-              timestamp: Date.now(),
-            },
-          ])
-          setStatus('error')
-
-          if (agentId) {
-            updateAgent(agentId, { status: 'error', isClaudeRunning: false })
-            clearSubagentsForParent(agentId)
-          }
-          finalizeRunReward('error')
-          setActiveClaudeSession(null)
-          activeRunDirectoryRef.current = null
-          runTokenBaselineRef.current = null
-          runModelBaselineRef.current = null
-          runStartedAtRef.current = null
-          break
-        }
-      }
+      routeClaudeEvent(event, eventHandlers)
     })
 
     return unsub
-  }, [addEvent, applyUsageSnapshot, clearSubagentsForParent, finalizeRunReward, persistMessage, setActiveClaudeSession, soundsEnabled, updateAgent])
+  }, [
+    addAgent,
+    addEvent,
+    applyUsageSnapshot,
+    chatSessionId,
+    clearSubagentsForParent,
+    finalizeRunReward,
+    incrementAgentFileCount,
+    persistMessage,
+    removeAgent,
+    resetRunState,
+    soundsEnabled,
+    updateAgent,
+    workingDir,
+  ])
 
   const resolveMentionedFiles = useCallback(async (rootDir: string, mentions: string[]) => {
     const normalizedMentions = Array.from(
