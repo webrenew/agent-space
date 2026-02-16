@@ -1,11 +1,16 @@
 import { BrowserWindow, ipcMain } from 'electron'
-import { spawn, type ChildProcess } from 'child_process'
-import { createInterface } from 'readline'
+import { type ChildProcess } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { logMainError, logMainEvent } from './diagnostics'
 import { writeFileAtomicSync } from './atomic-write'
+import {
+  clearManagedForceKillTimer,
+  resolveManagedRuntimeMs,
+  runManagedProcess,
+  scheduleManagedForceKill,
+} from './process-runner'
 
 type TodoRunnerRunStatus = 'idle' | 'running' | 'success' | 'error'
 type TodoRunnerRunTrigger = 'auto' | 'manual'
@@ -119,17 +124,16 @@ function createRuntime(): TodoRunnerRuntime {
 }
 
 function resolveTodoRunnerMaxRuntimeMs(): number {
-  const raw = process.env.AGENT_SPACE_TODO_RUNNER_MAX_RUNTIME_MS
-  if (!raw) return TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS
-  const parsed = Number.parseInt(raw, 10)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    logMainEvent('todo_runner.invalid_timeout_config', {
-      rawValue: raw,
-      fallbackMs: TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS,
-    }, 'warn')
-    return TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS
-  }
-  return parsed
+  return resolveManagedRuntimeMs({
+    envVarName: 'AGENT_SPACE_TODO_RUNNER_MAX_RUNTIME_MS',
+    defaultMs: TODO_RUNNER_DEFAULT_MAX_RUNTIME_MS,
+    onInvalidConfig: (rawValue, fallbackMs) => {
+      logMainEvent('todo_runner.invalid_timeout_config', {
+        rawValue,
+        fallbackMs,
+      }, 'warn')
+    },
+  })
 }
 
 function resolveTodoRunnerMaxConcurrentJobs(): number {
@@ -184,12 +188,6 @@ function nextJobId(): string {
 
 function nextTodoId(index: number): string {
   return `item-${Date.now()}-${index}-${Math.floor(Math.random() * 1_000_000)}`
-}
-
-function appendTail(current: string, text: string, max = 8_000): string {
-  const combined = `${current}${text}`
-  if (combined.length <= max) return combined
-  return combined.slice(combined.length - max)
 }
 
 function normalizeTodoItems(todoItems: string[]): string[] {
@@ -327,25 +325,22 @@ function ensureRuntime(jobId: string): TodoRunnerRuntime {
 }
 
 function clearForceKillTimer(jobId: string): void {
-  const timer = forceKillTimerByJobId.get(jobId)
-  if (!timer) return
-  clearTimeout(timer)
-  forceKillTimerByJobId.delete(jobId)
+  clearManagedForceKillTimer(forceKillTimerByJobId, jobId)
 }
 
 function scheduleForceKill(jobId: string, childProcess: ChildProcess, reason: string): void {
-  clearForceKillTimer(jobId)
-  const timer = setTimeout(() => {
-    forceKillTimerByJobId.delete(jobId)
-    try {
-      if (childProcess.exitCode !== null || childProcess.signalCode !== null) return
-      childProcess.kill('SIGKILL')
+  scheduleManagedForceKill({
+    timers: forceKillTimerByJobId,
+    key: jobId,
+    process: childProcess,
+    delayMs: TODO_RUNNER_FORCE_KILL_TIMEOUT_MS,
+    onForceKill: () => {
       logMainEvent('todo_runner.process.force_kill', { jobId, reason })
-    } catch (err) {
+    },
+    onForceKillFailed: (err) => {
       logMainError('todo_runner.process.force_kill_failed', err, { jobId, reason })
-    }
-  }, TODO_RUNNER_FORCE_KILL_TIMEOUT_MS)
-  forceKillTimerByJobId.set(jobId, timer)
+    },
+  })
 }
 
 function stopRunningProcess(jobId: string, reason: string): void {
@@ -702,46 +697,52 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
     AGENT_SPACE_YOLO_MODE: job.yoloMode ? '1' : '0',
   }
 
-  const proc = spawn(job.runnerCommand, {
-    cwd: job.workingDirectory,
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    shell: true,
-  })
-
-  runningProcessByJobId.set(job.id, { process: proc, todoIndex })
-  broadcastTodoRunnerUpdate()
-
-  try {
-    proc.stdin?.write(`${payloadJson}\n`)
-    proc.stdin?.end()
-  } catch {
-    // Ignore stdin write failures; process may not read stdin.
-  }
-
-  const rl = proc.stdout ? createInterface({ input: proc.stdout }) : null
-  let stdoutTail = ''
-  let stderrTail = ''
-  let resultError: string | null = null
-  let timedOut = false
-
   const maxRuntimeMs = resolveTodoRunnerMaxRuntimeMs()
-  const runtimeTimer = setTimeout(() => {
-    if (proc.exitCode !== null || proc.signalCode !== null) return
-    const timeoutSeconds = Math.max(1, Math.round(maxRuntimeMs / 1000))
-    timedOut = true
-    resultError = `Todo runner timed out after ${timeoutSeconds}s`
-    logMainEvent('todo_runner.todo.timeout', {
-      jobId: job.id,
-      jobName: job.name,
-      todoId,
-      todoIndex,
-      trigger,
-      maxRuntimeMs,
-    }, 'warn')
-    try {
-      proc.kill('SIGTERM')
-    } catch (err) {
+  const timeoutSeconds = Math.max(1, Math.round(maxRuntimeMs / 1000))
+  const processResult = await runManagedProcess({
+    command: job.runnerCommand,
+    spawnOptions: {
+      cwd: job.workingDirectory,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: true,
+    },
+    stdinPayload: `${payloadJson}\n`,
+    maxRuntimeMs,
+    forceKillTimeoutMs: TODO_RUNNER_FORCE_KILL_TIMEOUT_MS,
+    timeoutErrorMessage: `Todo runner timed out after ${timeoutSeconds}s`,
+    onSpawned: (process) => {
+      runningProcessByJobId.set(job.id, { process, todoIndex })
+      broadcastTodoRunnerUpdate()
+    },
+    onStdoutLine: (line, controls) => {
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>
+        if (parsed.status === 'error') {
+          controls.setResultError(typeof parsed.error === 'string'
+            ? parsed.error
+            : 'Runner reported status=error')
+        }
+        if (parsed.type === 'result' && parsed.is_error === true) {
+          controls.setResultError(typeof parsed.error === 'string'
+            ? parsed.error
+            : 'Runner reported result.is_error=true')
+        }
+      } catch {
+        // Ignore non-JSON lines.
+      }
+    },
+    onTimeout: () => {
+      logMainEvent('todo_runner.todo.timeout', {
+        jobId: job.id,
+        jobName: job.name,
+        todoId,
+        todoIndex,
+        trigger,
+        maxRuntimeMs,
+      }, 'warn')
+    },
+    onTimeoutSigtermFailed: (err) => {
       logMainError('todo_runner.todo.timeout_sigterm_failed', err, {
         jobId: job.id,
         jobName: job.name,
@@ -749,202 +750,159 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
         todoIndex,
         trigger,
       })
-    }
-    scheduleForceKill(job.id, proc, 'timeout')
-  }, maxRuntimeMs)
-
-  rl?.on('line', (line) => {
-    const trimmed = line.trim()
-    if (!trimmed) return
-    stdoutTail = appendTail(stdoutTail, `${trimmed}\n`)
-
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>
-      if (parsed.status === 'error') {
-        resultError = typeof parsed.error === 'string'
-          ? parsed.error
-          : 'Runner reported status=error'
-      }
-      if (parsed.type === 'result' && parsed.is_error === true) {
-        resultError = typeof parsed.error === 'string'
-          ? parsed.error
-          : 'Runner reported result.is_error=true'
-      }
-    } catch {
-      // Ignore non-JSON lines.
-    }
+    },
+    onForceKill: () => {
+      logMainEvent('todo_runner.process.force_kill', { jobId: job.id, reason: 'timeout' })
+    },
+    onForceKillFailed: (err) => {
+      logMainError('todo_runner.process.force_kill_failed', err, { jobId: job.id, reason: 'timeout' })
+    },
   })
 
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    stderrTail = appendTail(stderrTail, chunk.toString())
-  })
+  runningProcessByJobId.delete(job.id)
+  clearForceKillTimer(job.id)
+  const completedAt = Date.now()
+  const durationMs = processResult.durationMs
+  const wasStoppedByUser = stoppedByUserJobIds.has(job.id)
+  const payloadTransportError = isPayloadTransportSpawnError(processResult.spawnError)
+  const payloadTransportErrorMessage = 'Runner launch exceeded OS payload limits; payload stays on stdin and todo was not consumed'
+  if (wasStoppedByUser) {
+    stoppedByUserJobIds.delete(job.id)
+  }
 
-  await new Promise<void>((resolve) => {
-    proc.on('exit', (code) => {
-      clearTimeout(runtimeTimer)
-      rl?.close()
-      runningProcessByJobId.delete(job.id)
-      clearForceKillTimer(job.id)
+  const liveState = findLiveTodo(job.id, todoId)
+  if (!liveState) {
+    stoppedByUserJobIds.delete(job.id)
+    kickTodoRunner()
+    return
+  }
 
-      const completedAt = Date.now()
-      const durationMs = completedAt - startedAt
-      const liveState = findLiveTodo(job.id, todoId)
-      if (!liveState) {
-        stoppedByUserJobIds.delete(job.id)
-        resolve()
-        return
-      }
+  const runtimeNext = ensureRuntime(job.id)
+  runtimeNext.isRunning = false
+  runtimeNext.currentTodoIndex = null
+  runtimeNext.lastRunAt = completedAt
+  runtimeNext.lastDurationMs = durationMs
+  runtimeNext.lastRunTrigger = trigger
 
-      const runtimeNext = ensureRuntime(job.id)
-      runtimeNext.isRunning = false
-      runtimeNext.currentTodoIndex = null
-      runtimeNext.lastRunAt = completedAt
-      runtimeNext.lastDurationMs = durationMs
-      runtimeNext.lastRunTrigger = trigger
-
-      const wasStoppedByUser = stoppedByUserJobIds.has(job.id)
+  if (processResult.spawnError) {
+    if (liveState.todo) {
       if (wasStoppedByUser) {
-        stoppedByUserJobIds.delete(job.id)
-      }
-
-      let errorMessage: string | null = null
-      if (wasStoppedByUser) {
-        errorMessage = 'Stopped by user'
-      } else if (resultError) {
-        errorMessage = resultError
-      } else if (code !== 0) {
-        errorMessage = stderrTail.trim() || stdoutTail.trim() || `Runner exited with code ${code ?? 'null'}`
-      }
-
-      if (wasStoppedByUser) {
-        if (liveState.todo) {
-          liveState.todo.status = 'pending'
-          liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
-          liveState.todo.lastError = null
-        }
-        runtimeNext.lastStatus = 'idle'
-        runtimeNext.lastError = null
-      } else if (!errorMessage) {
-        if (liveState.todo) {
-          liveState.todo.status = 'done'
-          liveState.todo.lastError = null
-        }
-        runtimeNext.lastStatus = 'success'
-        runtimeNext.lastError = null
-        logMainEvent('todo_runner.todo.success', {
-          jobId: liveState.job.id,
-          jobName: liveState.job.name,
-          todoIndex,
-          trigger,
-          durationMs,
-        })
+        liveState.todo.status = 'pending'
+        liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
+        liveState.todo.lastError = null
+      } else if (payloadTransportError) {
+        liveState.todo.status = 'pending'
+        liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
+        liveState.todo.lastError = payloadTransportErrorMessage
       } else {
-        if (liveState.todo) {
-          liveState.todo.status = 'error'
-          liveState.todo.lastError = errorMessage
-        }
-        runtimeNext.lastStatus = 'error'
-        runtimeNext.lastError = errorMessage
-        logMainEvent('todo_runner.todo.error', {
-          jobId: liveState.job.id,
-          jobName: liveState.job.name,
-          todoIndex,
-          trigger,
-          durationMs,
-          timedOut,
-          error: errorMessage,
-        }, 'error')
-
-        if (liveState.todo && liveState.todo.attempts >= TODO_MAX_ATTEMPTS) {
-          liveState.job.enabled = false
-          runtimeNext.lastError = `${errorMessage} (attempt limit reached, job paused)`
-        }
+        liveState.todo.status = 'error'
+        liveState.todo.lastError = `Failed to spawn runner: ${processResult.spawnError.message}`
       }
+      liveState.todo.lastDurationMs = durationMs
+    }
 
-      if (liveState.todo) {
-        liveState.todo.lastDurationMs = durationMs
-      }
-      liveState.job.updatedAt = completedAt
-      runtimeByJobId.set(liveState.job.id, runtimeNext)
-      writeJobsToDisk(jobsCache)
-      broadcastTodoRunnerUpdate()
-      resolve()
+    if (!wasStoppedByUser && !payloadTransportError) {
+      liveState.job.enabled = false
+    }
+    liveState.job.updatedAt = completedAt
+
+    runtimeNext.lastStatus = wasStoppedByUser ? 'idle' : 'error'
+    runtimeNext.lastError = wasStoppedByUser
+      ? null
+      : payloadTransportError
+        ? payloadTransportErrorMessage
+        : liveState.todo?.lastError ?? `Failed to spawn runner: ${processResult.spawnError.message}`
+    runtimeByJobId.set(liveState.job.id, runtimeNext)
+
+    if (payloadTransportError) {
+      logMainEvent('todo_runner.todo.spawn_payload_error', {
+        jobId: job.id,
+        jobName: job.name,
+        todoIndex,
+        trigger,
+        code: isPayloadTransportSpawnError(processResult.spawnError)
+          ? processResult.spawnError.code ?? null
+          : null,
+        error: processResult.spawnError.message,
+      }, 'warn')
+    } else {
+      logMainError('todo_runner.todo.spawn_error', processResult.spawnError, {
+        jobId: job.id,
+        jobName: job.name,
+        todoIndex,
+        trigger,
+      })
+    }
+
+    writeJobsToDisk(jobsCache)
+    broadcastTodoRunnerUpdate()
+    kickTodoRunner()
+    return
+  }
+
+  let errorMessage: string | null = null
+  if (wasStoppedByUser) {
+    errorMessage = 'Stopped by user'
+  } else if (processResult.resultError) {
+    errorMessage = processResult.resultError
+  } else if (processResult.exitCode !== 0) {
+    errorMessage = processResult.stderrTail.trim()
+      || processResult.stdoutTail.trim()
+      || `Runner exited with code ${processResult.exitCode ?? 'null'}`
+  }
+
+  if (wasStoppedByUser) {
+    if (liveState.todo) {
+      liveState.todo.status = 'pending'
+      liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
+      liveState.todo.lastError = null
+    }
+    runtimeNext.lastStatus = 'idle'
+    runtimeNext.lastError = null
+  } else if (!errorMessage) {
+    if (liveState.todo) {
+      liveState.todo.status = 'done'
+      liveState.todo.lastError = null
+    }
+    runtimeNext.lastStatus = 'success'
+    runtimeNext.lastError = null
+    logMainEvent('todo_runner.todo.success', {
+      jobId: liveState.job.id,
+      jobName: liveState.job.name,
+      todoIndex,
+      trigger,
+      durationMs,
     })
+  } else {
+    if (liveState.todo) {
+      liveState.todo.status = 'error'
+      liveState.todo.lastError = errorMessage
+    }
+    runtimeNext.lastStatus = 'error'
+    runtimeNext.lastError = errorMessage
+    logMainEvent('todo_runner.todo.error', {
+      jobId: liveState.job.id,
+      jobName: liveState.job.name,
+      todoIndex,
+      trigger,
+      durationMs,
+      timedOut: processResult.timedOut,
+      error: errorMessage,
+    }, 'error')
 
-    proc.on('error', (err) => {
-      clearTimeout(runtimeTimer)
-      rl?.close()
-      runningProcessByJobId.delete(job.id)
-      clearForceKillTimer(job.id)
-      const completedAt = Date.now()
-      const durationMs = completedAt - startedAt
-      const wasStoppedByUser = stoppedByUserJobIds.has(job.id)
-      const payloadTransportError = isPayloadTransportSpawnError(err)
-      const payloadTransportErrorMessage = 'Runner launch exceeded OS payload limits; payload stays on stdin and todo was not consumed'
-      if (wasStoppedByUser) {
-        stoppedByUserJobIds.delete(job.id)
-      }
+    if (liveState.todo && liveState.todo.attempts >= TODO_MAX_ATTEMPTS) {
+      liveState.job.enabled = false
+      runtimeNext.lastError = `${errorMessage} (attempt limit reached, job paused)`
+    }
+  }
 
-      const liveState = findLiveTodo(job.id, todoId)
-      if (liveState) {
-        if (liveState.todo) {
-          if (wasStoppedByUser) {
-            liveState.todo.status = 'pending'
-            liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
-            liveState.todo.lastError = null
-          } else if (payloadTransportError) {
-            liveState.todo.status = 'pending'
-            liveState.todo.attempts = Math.max(0, liveState.todo.attempts - 1)
-            liveState.todo.lastError = payloadTransportErrorMessage
-          } else {
-            liveState.todo.status = 'error'
-            liveState.todo.lastError = `Failed to spawn runner: ${err.message}`
-          }
-          liveState.todo.lastDurationMs = durationMs
-        }
-        if (!wasStoppedByUser && !payloadTransportError) {
-          liveState.job.enabled = false
-        }
-        liveState.job.updatedAt = completedAt
-
-        const runtimeNext = ensureRuntime(liveState.job.id)
-        runtimeNext.isRunning = false
-        runtimeNext.currentTodoIndex = null
-        runtimeNext.lastRunAt = completedAt
-        runtimeNext.lastDurationMs = durationMs
-        runtimeNext.lastRunTrigger = trigger
-        runtimeNext.lastStatus = wasStoppedByUser ? 'idle' : 'error'
-        runtimeNext.lastError = wasStoppedByUser
-          ? null
-          : payloadTransportError
-            ? payloadTransportErrorMessage
-            : liveState.todo?.lastError ?? `Failed to spawn runner: ${err.message}`
-        runtimeByJobId.set(liveState.job.id, runtimeNext)
-      }
-
-      if (payloadTransportError) {
-        logMainEvent('todo_runner.todo.spawn_payload_error', {
-          jobId: job.id,
-          jobName: job.name,
-          todoIndex,
-          trigger,
-          code: err.code ?? null,
-          error: err.message,
-        }, 'warn')
-      } else {
-        logMainError('todo_runner.todo.spawn_error', err, {
-          jobId: job.id,
-          jobName: job.name,
-          todoIndex,
-          trigger,
-        })
-      }
-
-      writeJobsToDisk(jobsCache)
-      broadcastTodoRunnerUpdate()
-      resolve()
-    })
-  })
+  if (liveState.todo) {
+    liveState.todo.lastDurationMs = durationMs
+  }
+  liveState.job.updatedAt = completedAt
+  runtimeByJobId.set(liveState.job.id, runtimeNext)
+  writeJobsToDisk(jobsCache)
+  broadcastTodoRunnerUpdate()
 
   // Fill open worker slots promptly when a todo attempt exits.
   kickTodoRunner()
