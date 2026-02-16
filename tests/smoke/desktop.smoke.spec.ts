@@ -30,8 +30,33 @@ interface SmokeSchedulerAPI {
   debugRuntimeSize: () => Promise<number>
 }
 
+interface SmokeTodoRunnerJob {
+  id: string
+  isRunning: boolean
+}
+
+interface SmokeTodoRunnerJobInput {
+  id?: string
+  name: string
+  prompt: string
+  workingDirectory: string
+  runnerCommand: string
+  enabled: boolean
+  yoloMode: boolean
+  todoItems: string[]
+}
+
+interface SmokeTodoRunnerAPI {
+  list: () => Promise<SmokeTodoRunnerJob[]>
+  upsert: (job: SmokeTodoRunnerJobInput) => Promise<SmokeTodoRunnerJob>
+  delete: (jobId: string) => Promise<void>
+  start: (jobId: string) => Promise<SmokeTodoRunnerJob>
+  pause: (jobId: string) => Promise<SmokeTodoRunnerJob>
+}
+
 interface SmokeElectronAPI {
   scheduler: SmokeSchedulerAPI
+  todoRunner: SmokeTodoRunnerAPI
 }
 
 test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', async () => {
@@ -191,6 +216,57 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
         })
       ))
       .toBe(runtimeSizeBeforeDeleteWhileRunning)
+
+    // Regression check: editing todo items while a todo is running should be
+    // rejected so in-flight completion attribution remains stable.
+    const todoRunnerEditGuard = await mainWindow.evaluate(async ({ workingDirectory }) => {
+      const api = (window as unknown as { electronAPI: SmokeElectronAPI }).electronAPI
+      const runnerCommand = '/bin/sleep 30'
+      const created = await api.todoRunner.upsert({
+        name: 'Smoke edit guard while running',
+        prompt: 'smoke edit guard',
+        workingDirectory,
+        runnerCommand,
+        enabled: false,
+        yoloMode: false,
+        todoItems: ['first task', 'second task'],
+      })
+      await api.todoRunner.start(created.id)
+
+      const runStartDeadline = Date.now() + 5_000
+      let sawRunning = false
+      while (Date.now() < runStartDeadline) {
+        const jobs = await api.todoRunner.list()
+        const active = jobs.find((job) => job.id === created.id)
+        if (active?.isRunning) {
+          sawRunning = true
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+
+      let errorMessage: string | null = null
+      try {
+        await api.todoRunner.upsert({
+          id: created.id,
+          name: 'Smoke edit guard while running',
+          prompt: 'smoke edit guard',
+          workingDirectory,
+          runnerCommand,
+          enabled: true,
+          yoloMode: false,
+          todoItems: ['mutated task'],
+        })
+      } catch (err) {
+        errorMessage = String(err)
+      }
+
+      await api.todoRunner.pause(created.id)
+      await api.todoRunner.delete(created.id)
+      return { sawRunning, errorMessage }
+    }, { workingDirectory: process.cwd() })
+    expect(todoRunnerEditGuard.sawRunning).toBe(true)
+    expect(todoRunnerEditGuard.errorMessage).toContain('Cannot edit todo items while job is running')
 
     const chooseFolderButton = mainWindow.getByRole('button', { name: 'Choose folder' }).first()
     if (await chooseFolderButton.count()) {

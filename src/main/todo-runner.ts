@@ -381,6 +381,14 @@ function mergeTodoStates(todoItems: string[], previousTodos: TodoItemState[]): T
   return merged
 }
 
+function hasTodoListChanged(todoItems: string[], previousTodos: TodoItemState[]): boolean {
+  if (todoItems.length !== previousTodos.length) return true
+  for (let i = 0; i < todoItems.length; i += 1) {
+    if (todoItems[i] !== previousTodos[i]?.text) return true
+  }
+  return false
+}
+
 function toJobWithRuntime(job: TodoRunnerJobRecord): TodoRunnerJobView {
   const runtime = ensureRuntime(job.id)
   const totalTodos = job.todos.length
@@ -437,6 +445,12 @@ function upsertJob(input: TodoRunnerJobInput): TodoRunnerJobView {
     const index = jobsCache.findIndex((job) => job.id === normalized.id)
     if (index < 0) throw new Error(`Job not found: ${normalized.id}`)
     const previous = jobsCache[index]
+    if (
+      runningProcessByJobId.has(previous.id)
+      && hasTodoListChanged(normalized.todoItems, previous.todos)
+    ) {
+      throw new Error('Cannot edit todo items while job is running. Pause the job and try again.')
+    }
     const updated: TodoRunnerJobRecord = {
       ...previous,
       name: normalized.name,
