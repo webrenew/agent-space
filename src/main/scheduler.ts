@@ -769,6 +769,7 @@ async function schedulerTick(): Promise<void> {
   const now = new Date()
   const key = minuteKey(now)
   try {
+    const dueTasks: SchedulerTask[] = []
     for (const task of tasksCache) {
       if (!task.enabled) continue
       if (runningProcessByTaskId.has(task.id)) continue
@@ -781,8 +782,16 @@ async function schedulerTick(): Promise<void> {
       if (runtime.lastRunMinuteKey === key) continue
       runtime.lastRunMinuteKey = key
       runtimeByTaskId.set(task.id, runtime)
+      dueTasks.push(task)
+    }
 
-      await runTask(task, 'cron')
+    for (const task of dueTasks) {
+      void runTask(task, 'cron').catch((err) => {
+        logMainError('scheduler.tick.run_task_failed', err, {
+          taskId: task.id,
+          taskName: task.name,
+        })
+      })
     }
   } finally {
     schedulerTickInFlight = false
