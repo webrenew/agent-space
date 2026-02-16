@@ -6,6 +6,7 @@ import { AgentCharacter } from "./AgentCharacter";
 import { CelebrationEffect } from "./CelebrationEffect";
 import type { AgentStatus } from "@/types";
 import { resolveWorldTierConfig } from "@/lib/world-tier-config";
+import { resolveOfficeDeskLayout } from "@/lib/office-layout";
 
 const WALL_COLOR = "#E8E0D8";
 const FLOOR_COLOR = "#D4A574";
@@ -22,17 +23,6 @@ const SCREEN_COLORS: Record<AgentStatus, { color: string; emissive: string; inte
   done: { color: "#22d3ee", emissive: "#22d3ee", intensity: 0.3 },
 };
 
-/** Baseline desk positions for the current office layout. */
-const DESK_LAYOUT: Array<{
-  position: [number, number, number];
-  rotation: [number, number, number];
-  facing: [number, number, number];
-}> = [
-  { position: [-3, 0, -4], rotation: [0, Math.PI, 0], facing: [-3, 0, -4.8] },
-  { position: [3, 0, -4], rotation: [0, Math.PI, 0], facing: [3, 0, -4.8] },
-  { position: [-3, 0, -8], rotation: [0, Math.PI, 0], facing: [-3, 0, -8.8] },
-  { position: [3, 0, -8], rotation: [0, Math.PI, 0], facing: [3, 0, -8.8] },
-];
 const PIZZA_CENTER: [number, number, number] = [0, 0, -6.35];
 const PIZZA_RADIUS = 1.75;
 const BASE_WORLD_CAPS = resolveWorldTierConfig(0).caps;
@@ -336,9 +326,13 @@ function WallWindow({
 
 export function Office() {
   const agents = useDemoStore((s) => s.agents);
+  const deskLayout = useMemo(
+    () => resolveOfficeDeskLayout(Math.max(BASE_WORLD_CAPS.maxDesks, agents.length)),
+    [agents.length]
+  );
   const visibleAgents = useMemo(
-    () => agents.slice(0, Math.min(DESK_LAYOUT.length, BASE_WORLD_CAPS.maxAgents)),
-    [agents]
+    () => agents.slice(0, deskLayout.length),
+    [agents, deskLayout.length]
   );
   const partyAgents = useMemo(
     () =>
@@ -445,7 +439,7 @@ export function Office() {
 
       {/* Agent desks + characters + celebrations */}
       {visibleAgents.map((agent) => {
-        const layout = DESK_LAYOUT[agent.deskIndex];
+        const layout = deskLayout[agent.deskIndex];
         if (!layout) return null;
         const partyTarget = partySeatByAgentId.get(agent.id) ?? null;
         return (

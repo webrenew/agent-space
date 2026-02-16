@@ -6,6 +6,7 @@ import { HUD } from "@/components/ui/HUD";
 import { FallbackPage } from "@/components/ui/FallbackPage";
 import { ContentSection } from "@/components/seo/ContentSection";
 import { useSimulation } from "@/hooks/useSimulation";
+import { useWorldStateSceneTier } from "@/hooks/useWorldStateSceneTier";
 
 const Scene = dynamic(
   () => import("@/components/canvas/Scene").then((m) => m.Scene),
@@ -31,6 +32,7 @@ function useWebGLSupport() {
 
 export default function HomePage() {
   const webgl = useWebGLSupport();
+  useWorldStateSceneTier();
   useSimulation();
 
   // Loading state

@@ -16,14 +16,16 @@ interface DemoState {
 
   selectAgent: (id: string | null) => void
   updateAgent: (id: string, updates: Partial<Agent>) => void
+  setVisibleAgentCap: (maxAgents: number) => void
   addToast: (toast: Omit<Toast, 'id'>) => void
   removeToast: (id: string) => void
 }
 
 let toastIdCounter = 0
 const BASE_WORLD_CAPS = resolveWorldTierConfig(0).caps
+const MAX_DEMO_AGENTS = 8
 
-const DEMO_AGENTS: Agent[] = [
+const DEMO_AGENT_POOL: Agent[] = [
   {
     id: 'agent-1',
     name: 'Claude #1',
@@ -92,10 +94,85 @@ const DEMO_AGENTS: Agent[] = [
     activeCelebration: null,
     celebrationStartedAt: null,
   },
+  {
+    id: 'agent-5',
+    name: 'Claude #5',
+    agent_type: 'cli',
+    model: 'claude-sonnet-4-5-20250929',
+    status: 'thinking',
+    currentTask: 'Refining ingestion retry strategy',
+    tokens_input: 12900,
+    tokens_output: 17500,
+    files_modified: 24,
+    commitCount: 3,
+    deskIndex: 4,
+    started_at: Date.now() - 150000,
+    appearance: randomAppearance(),
+    activeCelebration: null,
+    celebrationStartedAt: null,
+  },
+  {
+    id: 'agent-6',
+    name: 'Claude #6',
+    agent_type: 'cli',
+    model: 'claude-opus-4-6-20250915',
+    status: 'tool_calling',
+    currentTask: 'Hardening webhook dedupe path',
+    tokens_input: 22100,
+    tokens_output: 19800,
+    files_modified: 29,
+    commitCount: 4,
+    deskIndex: 5,
+    started_at: Date.now() - 210000,
+    appearance: randomAppearance(),
+    activeCelebration: null,
+    celebrationStartedAt: null,
+  },
+  {
+    id: 'agent-7',
+    name: 'Claude #7',
+    agent_type: 'cli',
+    model: 'claude-haiku-4-5-20251001',
+    status: 'streaming',
+    currentTask: 'Drafting migration checklist',
+    tokens_input: 9700,
+    tokens_output: 11300,
+    files_modified: 18,
+    commitCount: 2,
+    deskIndex: 6,
+    started_at: Date.now() - 85000,
+    appearance: randomAppearance(),
+    activeCelebration: null,
+    celebrationStartedAt: null,
+  },
+  {
+    id: 'agent-8',
+    name: 'Claude #8',
+    agent_type: 'cli',
+    model: 'claude-sonnet-4-5-20250929',
+    status: 'thinking',
+    currentTask: 'Tracing release metadata mismatch',
+    tokens_input: 10800,
+    tokens_output: 12600,
+    files_modified: 16,
+    commitCount: 2,
+    deskIndex: 7,
+    started_at: Date.now() - 132000,
+    appearance: randomAppearance(),
+    activeCelebration: null,
+    celebrationStartedAt: null,
+  },
 ]
 
+function clampVisibleAgentCount(maxAgents: number): number {
+  if (!Number.isFinite(maxAgents)) return BASE_WORLD_CAPS.maxAgents
+  const floored = Math.floor(maxAgents)
+  const boundedByPool = Math.min(floored, MAX_DEMO_AGENTS, DEMO_AGENT_POOL.length)
+  return Math.max(BASE_WORLD_CAPS.maxAgents, boundedByPool)
+}
+
 export const useDemoStore = create<DemoState>((set) => ({
-  agents: DEMO_AGENTS.slice(0, BASE_WORLD_CAPS.maxAgents),
+  agents: DEMO_AGENT_POOL.slice(0, BASE_WORLD_CAPS.maxAgents),
   selectedAgentId: null,
   toasts: [],
 
@@ -107,6 +184,26 @@ export const useDemoStore = create<DemoState>((set) => ({
         a.id === id ? { ...a, ...updates } : a
       ),
     })),
+
+  setVisibleAgentCap: (maxAgents) =>
+    set((state) => {
+      const nextVisibleCount = clampVisibleAgentCount(maxAgents)
+      if (nextVisibleCount === state.agents.length) return state
+
+      const currentById = new Map(state.agents.map((agent) => [agent.id, agent]))
+      const nextAgents = DEMO_AGENT_POOL
+        .slice(0, nextVisibleCount)
+        .map((agent) => currentById.get(agent.id) ?? { ...agent })
+
+      const selectedAgentStillVisible =
+        state.selectedAgentId !== null &&
+        nextAgents.some((agent) => agent.id === state.selectedAgentId)
+
+      return {
+        agents: nextAgents,
+        selectedAgentId: selectedAgentStillVisible ? state.selectedAgentId : null,
+      }
+    }),
 
   addToast: (toast) =>
     set((state) => ({

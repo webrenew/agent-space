@@ -1,7 +1,10 @@
 "use client";
 
+import { useMemo } from "react";
 import { useDemoStore } from "@/stores/useDemoStore";
 import type { AgentStatus } from "@/types";
+import { resolveOfficeDeskLayout } from "@/lib/office-layout";
+import { resolveWorldTierConfig } from "@/lib/world-tier-config";
 
 const STATUS_COLOR: Record<AgentStatus, string> = {
   idle: "#94a3b8",
@@ -13,13 +16,7 @@ const STATUS_COLOR: Record<AgentStatus, string> = {
   done: "#22d3ee",
 };
 
-/** Matches DESK_LAYOUT in Office.tsx — minimap coordinates */
-const DESK_MAP: [number, number][] = [
-  [-3, -4],
-  [3, -4],
-  [-3, -8],
-  [3, -8],
-];
+const BASE_WORLD_CAPS = resolveWorldTierConfig(0).caps;
 
 const SCALE = 6;
 const MAP_W = 130;
@@ -36,6 +33,14 @@ function worldToMap(x: number, z: number) {
 
 export function Minimap() {
   const agents = useDemoStore((s) => s.agents);
+  const deskMap = useMemo(
+    () =>
+      resolveOfficeDeskLayout(Math.max(BASE_WORLD_CAPS.maxDesks, agents.length)).map((desk) => [
+        desk.position[0],
+        desk.position[2],
+      ]),
+    [agents.length]
+  );
 
   return (
     <div
@@ -76,7 +81,7 @@ export function Minimap() {
 
       {/* Agent dots at desk positions */}
       {agents.map((agent) => {
-        const desk = DESK_MAP[agent.deskIndex];
+        const desk = deskMap[agent.deskIndex];
         if (!desk) return null;
         const pos = worldToMap(desk[0], desk[1]);
         const color = STATUS_COLOR[agent.status];
