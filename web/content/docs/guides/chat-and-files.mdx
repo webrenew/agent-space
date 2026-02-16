@@ -28,7 +28,19 @@ Best practice:
 For non-text updates:
 
 - image proposals support side-by-side diff review plus apply/discard in Editor
-- unsupported binary types (PDF/audio/video/office assets) show external-compare fallback guidance
+- PDF proposals support staged text diff review when payload includes `dataUrl`,
+  `currentText`, and `proposedText`
+- unsupported audio/video/office binary types show explicit fallback guidance
+
+Example PDF proposal payload:
+
+```json
+{
+  "dataUrl": "data:application/pdf;base64,...",
+  "currentText": "Extracted text from current PDF",
+  "proposedText": "Extracted text from proposed PDF"
+}
+```
 
 ## Prompt Pattern For File Work
 

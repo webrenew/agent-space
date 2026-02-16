@@ -7,7 +7,7 @@ Agent Observer is a desktop-first observability workspace for AI agents, with a 
 - Monitor multiple AI agents in a shared 3D office and dashboard UI.
 - Track statuses, token flow, file modifications, and celebration/event streams.
 - Preview explorer-opened files across text, markdown, images, audio/video, and PDF
-  with staged text diffs and image proposal diff/apply support.
+  with staged text diffs, image proposal diff/apply, and PDF proposal text diff preview.
 - Offer a website installer endpoint (`/download`) that serves the latest macOS
   (Apple Silicon) `.dmg` build when release assets are available.
 - Run a production desktop app (Electron) plus a docs/demo web app (Next.js).

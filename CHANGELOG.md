@@ -22,6 +22,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   to GitHub releases on publish.
 - Editor now supports staged image proposal diffs with apply/discard, while
   unsupported non-text formats show explicit external-compare fallback guidance.
+- Editor now supports staged PDF proposal workflows with text diff preview
+  (`dataUrl` + extracted `currentText`/`proposedText`) plus apply/discard controls.
 
 ### Changed
 

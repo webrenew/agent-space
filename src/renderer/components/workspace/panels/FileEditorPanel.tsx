@@ -16,9 +16,11 @@ import { useLspBridge } from '../../../hooks/useLspBridge'
 import { useSettingsStore } from '../../../store/settings'
 import {
   stageImageProposal,
+  stagePdfProposal,
   unavailableNonTextDiffMessage,
   type NonTextPreviewKind,
   type StagedImageProposal,
+  type StagedPdfProposal,
 } from '../../../lib/non-text-diff'
 
 // ── Language detection ────────────────────────────────────────────────
@@ -392,6 +394,7 @@ export function FileEditorPanel() {
   const [imagePreviewDataUrl, setImagePreviewDataUrl] = useState<string | null>(null)
   const [mediaPreviewDataUrl, setMediaPreviewDataUrl] = useState<string | null>(null)
   const [stagedImageProposal, setStagedImageProposal] = useState<StagedImageProposal | null>(null)
+  const [stagedPdfProposal, setStagedPdfProposal] = useState<StagedPdfProposal | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [proposalNotice, setProposalNotice] = useState<string | null>(null)
@@ -415,7 +418,8 @@ export function FileEditorPanel() {
   const previewKind = filePath ? detectPreviewKind(fileName) : 'text'
   const isTextFile = isTextPreviewKind(previewKind)
   const hasStagedImageProposal = previewKind === 'image' && stagedImageProposal !== null
-  const hasPendingChanges = isTextFile ? isDirty : hasStagedImageProposal
+  const hasStagedPdfProposal = previewKind === 'pdf' && stagedPdfProposal !== null
+  const hasPendingChanges = isTextFile ? isDirty : (hasStagedImageProposal || hasStagedPdfProposal)
   const fileTypeLabel = previewLabel(previewKind, lang)
   const fileTypeColor = previewColor(previewKind, lang)
   const canPreviewText = isTextFile
@@ -437,6 +441,7 @@ export function FileEditorPanel() {
     const staged = stageImageProposal('', proposal.content)
     if (!staged.next.stagedProposal) {
       setStagedImageProposal(null)
+      setStagedPdfProposal(null)
       setProposalSource(proposal.source ?? 'agent')
       setProposalNotice(staged.notice)
       setViewMode('preview')
@@ -444,10 +449,29 @@ export function FileEditorPanel() {
     }
 
     setStagedImageProposal(staged.next.stagedProposal)
+    setStagedPdfProposal(null)
     setProposalSource(proposal.source ?? 'agent')
     setProposalNotice(null)
     setViewMode('diff')
   }, [])
+
+  const applyPdfProposalToCurrentFile = useCallback((proposal: FileUpdateProposal, currentDataUrlOverride?: string) => {
+    const staged = stagePdfProposal(currentDataUrlOverride ?? mediaPreviewDataUrl ?? '', proposal.content)
+    if (!staged.next.stagedProposal) {
+      setStagedPdfProposal(null)
+      setStagedImageProposal(null)
+      setProposalSource(proposal.source ?? 'agent')
+      setProposalNotice(staged.notice)
+      setViewMode('preview')
+      return
+    }
+
+    setStagedPdfProposal(staged.next.stagedProposal)
+    setStagedImageProposal(null)
+    setProposalSource(proposal.source ?? 'agent')
+    setProposalNotice(null)
+    setViewMode('diff')
+  }, [mediaPreviewDataUrl])
 
   // Listen for file open/proposal events
   useEffect(() => {
@@ -459,6 +483,7 @@ export function FileEditorPanel() {
       setProposalSource(null)
       setProposalNotice(null)
       setStagedImageProposal(null)
+      setStagedPdfProposal(null)
       setFilePath(nextPath)
     }
 
@@ -474,6 +499,9 @@ export function FileEditorPanel() {
         } else if (!isLoading && previewKind === 'image') {
           pendingProposalRef.current = null
           applyImageProposalToCurrentFile(detail)
+        } else if (!isLoading && previewKind === 'pdf') {
+          pendingProposalRef.current = null
+          applyPdfProposalToCurrentFile(detail)
         } else if (!isLoading) {
           pendingProposalRef.current = null
           setProposalSource(detail.source ?? 'agent')
@@ -492,7 +520,7 @@ export function FileEditorPanel() {
       window.removeEventListener('file:open', openHandler)
       window.removeEventListener('file:propose-update', proposalHandler as EventListener)
     }
-  }, [applyImageProposalToCurrentFile, applyProposalToCurrentFile, fileName, filePath, isLoading, isTextFile, previewKind])
+  }, [applyImageProposalToCurrentFile, applyPdfProposalToCurrentFile, applyProposalToCurrentFile, fileName, filePath, isLoading, isTextFile, previewKind])
 
   // Load file content/preview
   useEffect(() => {
@@ -507,6 +535,7 @@ export function FileEditorPanel() {
     setImagePreviewDataUrl(null)
     setMediaPreviewDataUrl(null)
     setStagedImageProposal(null)
+    setStagedPdfProposal(null)
     setProposalNotice(null)
     setViewMode(defaultViewMode(previewKind))
 
@@ -561,8 +590,12 @@ export function FileEditorPanel() {
           const pending = pendingProposalRef.current
           if (pending && pending.path === targetPath) {
             pendingProposalRef.current = null
-            setProposalSource(pending.source ?? 'agent')
-            setProposalNotice(nonTextDiffFallbackNotice(previewKind, fileName))
+            if (previewKind === 'pdf') {
+              applyPdfProposalToCurrentFile(pending, result.dataUrl)
+            } else {
+              setProposalSource(pending.source ?? 'agent')
+              setProposalNotice(nonTextDiffFallbackNotice(previewKind, fileName))
+            }
           }
         } catch (err) {
           if (cancelled) return
@@ -646,7 +679,7 @@ export function FileEditorPanel() {
 
     void loadTextFile()
     return () => { cancelled = true }
-  }, [applyImageProposalToCurrentFile, fileName, filePath, notifyChange, previewKind])
+  }, [applyImageProposalToCurrentFile, applyPdfProposalToCurrentFile, fileName, filePath, notifyChange, previewKind])
 
   // Save handler (staged through diff preview)
   const handleSave = useCallback(async () => {
@@ -699,6 +732,26 @@ export function FileEditorPanel() {
     }
   }, [filePath, isSaving, previewKind, stagedImageProposal])
 
+  const handleApplyPdfProposal = useCallback(async () => {
+    if (!filePath || previewKind !== 'pdf' || !stagedPdfProposal || isSaving) return
+
+    setIsSaving(true)
+    try {
+      const result = await window.electronAPI.fs.writeDataUrl(filePath, stagedPdfProposal.dataUrl)
+      setMediaPreviewDataUrl(stagedPdfProposal.dataUrl)
+      setFileSize(result.size)
+      setStagedPdfProposal(null)
+      setProposalSource(null)
+      setProposalNotice(null)
+      setViewMode('preview')
+    } catch (err) {
+      console.error('[FileEditor] PDF apply failed:', err)
+      setError(`Failed to apply PDF update: ${err instanceof Error ? err.message : 'unknown'}`)
+    } finally {
+      setIsSaving(false)
+    }
+  }, [filePath, isSaving, previewKind, stagedPdfProposal])
+
   const handleDiscardChanges = useCallback(() => {
     if (isTextFile) {
       setContent(savedContentRef.current)
@@ -711,6 +764,14 @@ export function FileEditorPanel() {
 
     if (previewKind === 'image') {
       setStagedImageProposal(null)
+      setProposalSource(null)
+      setProposalNotice(null)
+      setViewMode('preview')
+      return
+    }
+
+    if (previewKind === 'pdf') {
+      setStagedPdfProposal(null)
       setProposalSource(null)
       setProposalNotice(null)
       setViewMode('preview')
@@ -804,6 +865,18 @@ export function FileEditorPanel() {
       notifyChange(value)
     })
   }
+
+  const handleReadonlyDiffEditorMount = useCallback((diffEditor: editor.IStandaloneDiffEditor, monaco: Monaco): void => {
+    defineOrchidTheme(monaco)
+    monaco.editor.setTheme('orchid-dark')
+
+    const originalEditor = diffEditor.getOriginalEditor()
+    const modifiedEditor = diffEditor.getModifiedEditor()
+    applyEditorAppearance(originalEditor)
+    applyEditorAppearance(modifiedEditor)
+    originalEditor.updateOptions({ readOnly: true })
+    modifiedEditor.updateOptions({ readOnly: true })
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -971,6 +1044,26 @@ export function FileEditorPanel() {
         <audio src={mediaPreviewDataUrl} controls style={{ width: '100%' }} />
       </div>
     )
+  } else if (previewKind === 'pdf' && viewMode === 'diff' && stagedPdfProposal) {
+    body = (
+      <DiffEditor
+        height="100%"
+        language="plaintext"
+        original={stagedPdfProposal.currentText}
+        modified={stagedPdfProposal.proposedText}
+        theme="orchid-dark"
+        onMount={handleReadonlyDiffEditorMount}
+        options={{
+          readOnly: true,
+          automaticLayout: true,
+          originalEditable: false,
+          renderSideBySide: true,
+          enableSplitViewResizing: true,
+          ignoreTrimWhitespace: false,
+          minimap: { enabled: false },
+        }}
+      />
+    )
   } else if (previewKind === 'pdf' && mediaPreviewDataUrl) {
     body = (
       <iframe
@@ -1038,8 +1131,12 @@ export function FileEditorPanel() {
     ? ''
     : hasStagedImageProposal && viewMode === 'diff'
       ? 'Image diff preview (apply writes file)'
-      : hasStagedImageProposal
+    : hasStagedImageProposal
         ? 'Image proposal staged'
+      : hasStagedPdfProposal && viewMode === 'diff'
+          ? 'PDF text diff preview (apply writes file)'
+        : hasStagedPdfProposal
+            ? 'PDF proposal staged'
         : !isTextFile
           ? (proposalNotice ?? `${fileTypeLabel} preview`)
           : viewMode === 'diff'
@@ -1132,6 +1229,26 @@ export function FileEditorPanel() {
               </button>
             </>
           )}
+          {hasStagedPdfProposal && (
+            <>
+              <button
+                type="button"
+                style={modeButtonStyle(viewMode === 'preview')}
+                onClick={() => setViewMode('preview')}
+                title="Preview mode"
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                style={modeButtonStyle(viewMode === 'diff')}
+                onClick={() => setViewMode('diff')}
+                title="Diff preview"
+              >
+                Diff
+              </button>
+            </>
+          )}
 
           {diagnosticCounts.errors > 0 && (
             <span style={{ color: '#c45050', fontSize: 10 }}>
@@ -1190,6 +1307,32 @@ export function FileEditorPanel() {
                   void handleApplyImageProposal()
                 }}
                 title={viewMode === 'diff' ? 'Apply staged image update' : 'Review staged image diff'}
+              >
+                {isSaving ? 'Saving...' : viewMode === 'diff' ? 'Apply' : 'Review'}
+              </button>
+            </>
+          )}
+          {hasStagedPdfProposal && (
+            <>
+              <button
+                type="button"
+                style={modeButtonStyle(false)}
+                onClick={handleDiscardChanges}
+                title="Discard staged PDF update"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                style={modeButtonStyle(false)}
+                onClick={() => {
+                  if (viewMode !== 'diff') {
+                    setViewMode('diff')
+                    return
+                  }
+                  void handleApplyPdfProposal()
+                }}
+                title={viewMode === 'diff' ? 'Apply staged PDF update' : 'Review staged PDF diff'}
               >
                 {isSaving ? 'Saving...' : viewMode === 'diff' ? 'Apply' : 'Review'}
               </button>
