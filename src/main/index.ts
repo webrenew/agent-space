@@ -137,6 +137,34 @@ patchIpcMainWithTelemetry()
 
 // Track popped-out chat windows: sessionId → BrowserWindow
 const chatWindows = new Map<string, BrowserWindow>()
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['https:', 'http:'])
+
+function openExternalUrlIfAllowed(url: string, source: 'main_window' | 'chat_popout'): void {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    logMainEvent('external_url.blocked', { source, reason: 'invalid_url', url }, 'warn')
+    return
+  }
+
+  if (!ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
+    logMainEvent('external_url.blocked', {
+      source,
+      reason: 'protocol_not_allowed',
+      protocol: parsed.protocol,
+      url: parsed.toString(),
+    }, 'warn')
+    return
+  }
+
+  void shell.openExternal(parsed.toString()).catch((err) => {
+    logMainError('external_url.open_failed', err, {
+      source,
+      url: parsed.toString(),
+    })
+  })
+}
 
 function createChatWindow(sessionId: string, mainWindow: BrowserWindow): BrowserWindow {
   addStartupBreadcrumb('chat.popout.create', { sessionId })
@@ -156,7 +184,7 @@ function createChatWindow(sessionId: string, mainWindow: BrowserWindow): Browser
   })
 
   chatWin.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    openExternalUrlIfAllowed(url, 'chat_popout')
     return { action: 'deny' }
   })
 
@@ -250,7 +278,7 @@ if (!gotTheLock) {
     })
 
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url)
+      openExternalUrlIfAllowed(url, 'main_window')
       return { action: 'deny' }
     })
 

@@ -35,6 +35,44 @@ test('desktop smoke flows: launch, reopen, folder scope, popout, terminal', asyn
       await expect(mainWindow.getByRole('button', { name: 'pick' }).first()).toBeVisible()
     }
 
+    // Regression check: only allowlisted external URL protocols should be opened.
+    await electronApp.evaluate(({ shell }) => {
+      const g = globalThis as Record<string, unknown>
+      g.__smokeOriginalOpenExternal = shell.openExternal
+      g.__smokeOpenExternalCalls = [] as string[]
+      shell.openExternal = async (url: string) => {
+        const calls = ((g.__smokeOpenExternalCalls as string[] | undefined) ?? [])
+        calls.push(url)
+        g.__smokeOpenExternalCalls = calls
+      }
+    })
+    await mainWindow.evaluate(() => {
+      window.open('https://example.com/smoke-open-external')
+      window.open('file:///tmp/blocked-open-external')
+    })
+    await expect
+      .poll(async () => (
+        await electronApp.evaluate(() => {
+          const g = globalThis as Record<string, unknown>
+          return ((g.__smokeOpenExternalCalls as string[] | undefined) ?? []).length
+        })
+      ))
+      .toBe(1)
+    const openExternalCalls = await electronApp.evaluate(() => {
+      const g = globalThis as Record<string, unknown>
+      return ((g.__smokeOpenExternalCalls as string[] | undefined) ?? [])
+    })
+    expect(openExternalCalls).toEqual(['https://example.com/smoke-open-external'])
+    await electronApp.evaluate(({ shell }) => {
+      const g = globalThis as Record<string, unknown>
+      const original = g.__smokeOriginalOpenExternal
+      if (typeof original === 'function') {
+        shell.openExternal = original as typeof shell.openExternal
+      }
+      delete g.__smokeOriginalOpenExternal
+      delete g.__smokeOpenExternalCalls
+    })
+
     // Regression check: unsolicited Claude events must be ignored when no
     // active Claude session is tracked in this chat panel.
     const unsolicitedMarker = '__smoke_unsolicited_claude_event__'
