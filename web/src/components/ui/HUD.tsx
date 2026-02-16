@@ -171,6 +171,10 @@ function TopBar({
   const selectedAgentId = useDemoStore((s) => s.selectedAgentId);
   const selectAgent = useDemoStore((s) => s.selectAgent);
   const updateAgent = useDemoStore((s) => s.updateAgent);
+  const experimentalDecorationsEnabled = useDemoStore((s) => s.experimentalDecorationsEnabled);
+  const setExperimentalDecorationsEnabled = useDemoStore(
+    (s) => s.setExperimentalDecorationsEnabled
+  );
   const addToast = useDemoStore((s) => s.addToast);
   const isMac = useMemo(
     () => typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC"),
@@ -421,6 +425,15 @@ function TopBar({
     showToast(`Layout reset. Zoom ${Math.round(level * 100)}%.`, "success");
   }, [applyZoom, onResetLayout, showToast]);
 
+  const toggleExperimentalDecorations = useCallback(() => {
+    const next = !experimentalDecorationsEnabled;
+    setExperimentalDecorationsEnabled(next);
+    showToast(
+      next ? "Experimental office decorations enabled." : "Experimental office decorations disabled.",
+      "info"
+    );
+  }, [experimentalDecorationsEnabled, setExperimentalDecorationsEnabled, showToast]);
+
   const resetZoom = useCallback(() => {
     const level = applyZoom(1);
     showToast(`Zoom reset to ${Math.round(level * 100)}%.`, "info");
@@ -587,6 +600,11 @@ function TopBar({
         openFileExplorer();
         return;
       }
+      if (event.shiftKey && key === "d") {
+        event.preventDefault();
+        toggleExperimentalDecorations();
+        return;
+      }
       if (key === "p") {
         event.preventDefault();
         runFileSearch();
@@ -634,6 +652,7 @@ function TopBar({
     openFolderDialog,
     openHelp,
     openSettings,
+    toggleExperimentalDecorations,
     resetLayout,
     resetZoom,
     runFileSearch,
@@ -860,6 +879,20 @@ function TopBar({
                     {modLabel}+Shift+R
                   </span>
                 </div>
+                <div
+                  onClick={() => runMenuAction(toggleExperimentalDecorations)}
+                  className="hover-row"
+                  style={menuRowStyle}
+                >
+                  <span style={{ color: "#9A9692", flex: 1 }}>
+                    {experimentalDecorationsEnabled
+                      ? "Disable Experimental Decor"
+                      : "Enable Experimental Decor"}
+                  </span>
+                  <span style={{ color: "#595653", fontSize: 10, fontWeight: 500 }}>
+                    {modLabel}+Shift+D
+                  </span>
+                </div>
                 <div style={{ height: 1, margin: "4px 6px", background: "rgba(89,86,83,0.25)" }} />
                 <div
                   onClick={() => runMenuAction(toggleDevTools)}
@@ -955,6 +988,24 @@ function TopBar({
           <strong style={{ color: "#9A9692" }}>{formatTokens(totalTokens)}</strong>{" "}
           tokens
         </span>
+        <span style={{ color: "#595653" }}>|</span>
+        <button
+          className="hover-row"
+          onClick={toggleExperimentalDecorations}
+          style={{
+            border: "1px solid rgba(89,86,83,0.35)",
+            borderRadius: 999,
+            background: "rgba(26,26,25,0.65)",
+            color: experimentalDecorationsEnabled ? "#9A9692" : "#74747C",
+            fontSize: 10,
+            padding: "2px 8px",
+            cursor: "pointer",
+          }}
+          title="Toggle experimental office decorations"
+          aria-label="Toggle experimental office decorations"
+        >
+          Decor {experimentalDecorationsEnabled ? "On" : "Off"}
+        </button>
         <span style={{ color: "#595653" }}>|</span>
         <span style={{ color: "#9A9692" }}>{timeStr}</span>
       </div>

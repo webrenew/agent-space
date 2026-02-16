@@ -7,6 +7,7 @@ import { CelebrationEffect } from "./CelebrationEffect";
 import type { AgentStatus } from "@/types";
 import { resolveWorldTierConfig } from "@/lib/world-tier-config";
 import { resolveOfficeDeskLayout } from "@/lib/office-layout";
+import { resolveOfficeDetailVisibility } from "@/lib/office-detail";
 
 const WALL_COLOR = "#E8E0D8";
 const FLOOR_COLOR = "#D4A574";
@@ -37,6 +38,12 @@ const OFFICE_PLANT_LAYOUT: Array<{ position: [number, number, number]; scale: nu
   { position: [10.05, 0, -5.2], scale: 0.85 },
   { position: [0, 0, 2.8], scale: 0.95 },
   { position: [6.8, 0, -11.3], scale: 0.75 },
+  { position: [-6.9, 0, -11.2], scale: 0.78 },
+  { position: [-1.8, 0, -11.7], scale: 0.82 },
+  { position: [1.8, 0, -11.7], scale: 0.82 },
+  { position: [0, 0, -12.5], scale: 0.88 },
+  { position: [-6.9, 0, 2.4], scale: 0.84 },
+  { position: [6.9, 0, 2.4], scale: 0.84 },
 ];
 
 function computePizzaSeat(index: number, total: number): [number, number, number] {
@@ -324,11 +331,62 @@ function WallWindow({
   );
 }
 
+function Whiteboard({
+  position,
+}: {
+  position: [number, number, number];
+}) {
+  return (
+    <group position={position}>
+      <mesh>
+        <boxGeometry args={[2.5, 1.5, 0.05]} />
+        <meshStandardMaterial color="white" />
+      </mesh>
+      <mesh position={[-0.3, 0.2, 0.03]}>
+        <boxGeometry args={[0.8, 0.02, 0.01]} />
+        <meshStandardMaterial color="#4ECDC4" />
+      </mesh>
+      <mesh position={[0.2, -0.1, 0.03]}>
+        <boxGeometry args={[0.6, 0.02, 0.01]} />
+        <meshStandardMaterial color="#FF6B35" />
+      </mesh>
+    </group>
+  );
+}
+
 export function Office() {
   const agents = useDemoStore((s) => s.agents);
+  const sceneUnlocks = useDemoStore((s) => s.sceneUnlocks);
+  const sceneCaps = useDemoStore((s) => s.sceneCaps);
+  const experimentalDecorationsEnabled = useDemoStore(
+    (s) => s.experimentalDecorationsEnabled
+  );
   const deskLayout = useMemo(
-    () => resolveOfficeDeskLayout(Math.max(BASE_WORLD_CAPS.maxDesks, agents.length)),
-    [agents.length]
+    () =>
+      resolveOfficeDeskLayout(
+        Math.max(BASE_WORLD_CAPS.maxDesks, sceneCaps.maxDesks, agents.length)
+      ),
+    [agents.length, sceneCaps.maxDesks]
+  );
+  const officeDetailVisibility = useMemo(
+    () =>
+      resolveOfficeDetailVisibility({
+        unlocks: sceneUnlocks,
+        caps: sceneCaps,
+        experimentalDecorationsEnabled,
+        totalPlantSlots: OFFICE_PLANT_LAYOUT.length,
+      }),
+    [experimentalDecorationsEnabled, sceneCaps, sceneUnlocks]
+  );
+  const detailProps = useMemo(
+    () => [
+      <MonitorWall key="detail-monitor-wall" position={[10.88, 0, -5]} rotation={[0, -Math.PI / 2, 0]} />,
+      <Bookshelf key="detail-bookshelf" position={[-6, 1.1, -13.7]} />,
+      <CoffeeStation key="detail-coffee" position={[6, 0, -12]} />,
+      <ServerRack key="detail-server-rack" position={[9.5, 1, -12]} />,
+      <Whiteboard key="detail-whiteboard" position={[2, 1.5, -13.85]} />,
+    ],
+    []
   );
   const visibleAgents = useMemo(
     () => agents.slice(0, deskLayout.length),
@@ -521,41 +579,16 @@ export function Office() {
         </group>
       )}
 
-      {/* Monitor wall mounted flush on right wall */}
-      <MonitorWall position={[10.88, 0, -5]} rotation={[0, -Math.PI / 2, 0]} />
-
       {/* Task board */}
       <TaskBoard position={[0, 1.8, -13.85]} />
 
-      {/* Bookshelf */}
-      <Bookshelf position={[-6, 1.1, -13.7]} />
-
-      {/* Coffee station */}
-      <CoffeeStation position={[6, 0, -12]} />
-
-      {/* Server rack */}
-      <ServerRack position={[9.5, 1, -12]} />
+      {/* Tier-gated detail props */}
+      {detailProps.slice(0, officeDetailVisibility.visibleDetailPropCount)}
 
       {/* Plants throughout the office */}
-      {OFFICE_PLANT_LAYOUT.slice(0, BASE_WORLD_CAPS.maxOfficePlants).map((plant, index) => (
+      {OFFICE_PLANT_LAYOUT.slice(0, officeDetailVisibility.visiblePlantCount).map((plant, index) => (
         <Plant key={`office-plant-${index}`} position={plant.position} scale={plant.scale} />
       ))}
-
-      {/* Whiteboard */}
-      <group position={[2, 1.5, -13.85]}>
-        <mesh>
-          <boxGeometry args={[2.5, 1.5, 0.05]} />
-          <meshStandardMaterial color="white" />
-        </mesh>
-        <mesh position={[-0.3, 0.2, 0.03]}>
-          <boxGeometry args={[0.8, 0.02, 0.01]} />
-          <meshStandardMaterial color="#4ECDC4" />
-        </mesh>
-        <mesh position={[0.2, -0.1, 0.03]}>
-          <boxGeometry args={[0.6, 0.02, 0.01]} />
-          <meshStandardMaterial color="#FF6B35" />
-        </mesh>
-      </group>
     </group>
   );
 }

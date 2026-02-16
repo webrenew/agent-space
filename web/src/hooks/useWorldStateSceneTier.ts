@@ -1,17 +1,30 @@
 import { useEffect } from "react";
-import { resolveWorldTierConfig } from "@/lib/world-tier-config";
+import {
+  resolveWorldTierConfig,
+  type WorldTierEntityCaps,
+  type WorldUnlockFlags,
+} from "@/lib/world-tier-config";
 import { useDemoStore } from "@/stores/useDemoStore";
 
-const BASE_WORLD_CAPS = resolveWorldTierConfig(0).caps;
+const BASE_WORLD_TIER = resolveWorldTierConfig(0);
+const BASE_WORLD_UNLOCKS = BASE_WORLD_TIER.unlocks;
+const BASE_WORLD_CAPS = BASE_WORLD_TIER.caps;
 const POLL_INTERVAL_MS = 60_000;
 
 interface WorldStateTierSnapshot {
   unlocks?: {
     agentsAndDesks?: boolean;
+    officeDetail?: boolean;
+    exteriorPark?: boolean;
+    blueSky?: boolean;
+    worldRichness?: boolean;
   };
   caps?: {
     maxAgents?: number;
     maxDesks?: number;
+    maxOfficeProps?: number;
+    maxOfficePlants?: number;
+    maxExteriorProps?: number;
   };
 }
 
@@ -31,8 +44,45 @@ function resolveVisibleAgentCap(snapshot: WorldStateTierSnapshot): number {
   );
 }
 
+function resolveSceneUnlocks(snapshot: WorldStateTierSnapshot): WorldUnlockFlags {
+  return {
+    agentsAndDesks: snapshot.unlocks?.agentsAndDesks === true,
+    officeDetail: snapshot.unlocks?.officeDetail === true,
+    exteriorPark: snapshot.unlocks?.exteriorPark === true,
+    blueSky: snapshot.unlocks?.blueSky === true,
+    worldRichness: snapshot.unlocks?.worldRichness === true,
+  };
+}
+
+function resolveSceneCaps(snapshot: WorldStateTierSnapshot): WorldTierEntityCaps {
+  const maxAgents = Number(snapshot.caps?.maxAgents);
+  const maxDesks = Number(snapshot.caps?.maxDesks);
+  const maxOfficeProps = Number(snapshot.caps?.maxOfficeProps);
+  const maxOfficePlants = Number(snapshot.caps?.maxOfficePlants);
+  const maxExteriorProps = Number(snapshot.caps?.maxExteriorProps);
+
+  if (
+    !Number.isFinite(maxAgents) ||
+    !Number.isFinite(maxDesks) ||
+    !Number.isFinite(maxOfficeProps) ||
+    !Number.isFinite(maxOfficePlants) ||
+    !Number.isFinite(maxExteriorProps)
+  ) {
+    return { ...BASE_WORLD_CAPS };
+  }
+
+  return {
+    maxAgents: Math.floor(Math.max(BASE_WORLD_CAPS.maxAgents, maxAgents)),
+    maxDesks: Math.floor(Math.max(BASE_WORLD_CAPS.maxDesks, maxDesks)),
+    maxOfficeProps: Math.floor(Math.max(BASE_WORLD_CAPS.maxOfficeProps, maxOfficeProps)),
+    maxOfficePlants: Math.floor(Math.max(BASE_WORLD_CAPS.maxOfficePlants, maxOfficePlants)),
+    maxExteriorProps: Math.floor(Math.max(BASE_WORLD_CAPS.maxExteriorProps, maxExteriorProps)),
+  };
+}
+
 export function useWorldStateSceneTier() {
   const setVisibleAgentCap = useDemoStore((s) => s.setVisibleAgentCap);
+  const setSceneTierState = useDemoStore((s) => s.setSceneTierState);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,9 +96,14 @@ export function useWorldStateSceneTier() {
 
         const payload = (await response.json()) as WorldStateTierSnapshot;
         if (cancelled) return;
+        setSceneTierState(resolveSceneUnlocks(payload), resolveSceneCaps(payload));
         setVisibleAgentCap(resolveVisibleAgentCap(payload));
       } catch {
         // Keep the current view state if fetch fails.
+        if (!cancelled) {
+          setSceneTierState({ ...BASE_WORLD_UNLOCKS }, { ...BASE_WORLD_CAPS });
+          setVisibleAgentCap(BASE_WORLD_CAPS.maxAgents);
+        }
       }
     };
 
@@ -61,5 +116,5 @@ export function useWorldStateSceneTier() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [setVisibleAgentCap]);
+  }, [setSceneTierState, setVisibleAgentCap]);
 }

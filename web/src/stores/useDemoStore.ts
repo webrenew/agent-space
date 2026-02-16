@@ -1,7 +1,11 @@
 import { create } from 'zustand'
 import type { Agent } from '@/types'
 import { randomAppearance } from '@/types'
-import { resolveWorldTierConfig } from '@/lib/world-tier-config'
+import {
+  resolveWorldTierConfig,
+  type WorldTierEntityCaps,
+  type WorldUnlockFlags,
+} from '@/lib/world-tier-config'
 
 interface Toast {
   id: string
@@ -13,16 +17,23 @@ interface DemoState {
   agents: Agent[]
   selectedAgentId: string | null
   toasts: Toast[]
+  sceneUnlocks: WorldUnlockFlags
+  sceneCaps: WorldTierEntityCaps
+  experimentalDecorationsEnabled: boolean
 
   selectAgent: (id: string | null) => void
   updateAgent: (id: string, updates: Partial<Agent>) => void
   setVisibleAgentCap: (maxAgents: number) => void
+  setSceneTierState: (unlocks: WorldUnlockFlags, caps: WorldTierEntityCaps) => void
+  setExperimentalDecorationsEnabled: (enabled: boolean) => void
   addToast: (toast: Omit<Toast, 'id'>) => void
   removeToast: (id: string) => void
 }
 
 let toastIdCounter = 0
-const BASE_WORLD_CAPS = resolveWorldTierConfig(0).caps
+const BASE_WORLD_TIER = resolveWorldTierConfig(0)
+const BASE_WORLD_CAPS = BASE_WORLD_TIER.caps
+const BASE_WORLD_UNLOCKS = BASE_WORLD_TIER.unlocks
 const MAX_DEMO_AGENTS = 8
 
 const DEMO_AGENT_POOL: Agent[] = [
@@ -175,6 +186,9 @@ export const useDemoStore = create<DemoState>((set) => ({
   agents: DEMO_AGENT_POOL.slice(0, BASE_WORLD_CAPS.maxAgents),
   selectedAgentId: null,
   toasts: [],
+  sceneUnlocks: { ...BASE_WORLD_UNLOCKS },
+  sceneCaps: { ...BASE_WORLD_CAPS },
+  experimentalDecorationsEnabled: true,
 
   selectAgent: (id) => set({ selectedAgentId: id }),
 
@@ -204,6 +218,15 @@ export const useDemoStore = create<DemoState>((set) => ({
         selectedAgentId: selectedAgentStillVisible ? state.selectedAgentId : null,
       }
     }),
+
+  setSceneTierState: (unlocks, caps) =>
+    set({
+      sceneUnlocks: { ...unlocks },
+      sceneCaps: { ...caps },
+    }),
+
+  setExperimentalDecorationsEnabled: (enabled) =>
+    set({ experimentalDecorationsEnabled: enabled }),
 
   addToast: (toast) =>
     set((state) => ({
