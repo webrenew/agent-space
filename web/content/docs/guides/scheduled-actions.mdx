@@ -89,6 +89,14 @@ After saving a schedule:
 - Manual and cron-triggered runs share the same execution path.
 - Schedule definitions are persisted locally.
 
+### Pending Backlog Cap
+
+- Pending cron backlog is bounded per task to prevent unbounded memory growth.
+- Default per-task cap: `240` pending minute entries.
+- Oldest pending entries are dropped first (newest entries are retained).
+- Operator signal: diagnostics event `scheduler.tick.backlog_capped`.
+- Optional override: `AGENT_SPACE_SCHEDULER_PENDING_BACKLOG_LIMIT` (`1` to `1440`).
+
 Persistence location:
 
 - `~/.agent-observer/schedules.json`

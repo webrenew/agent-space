@@ -48,6 +48,7 @@ Fix:
 3. Confirm app was open at trigger time.
 4. Use **Run now** to test immediate execution path.
 5. Verify working directory exists.
+6. If runs stay behind, check diagnostics for `scheduler.tick.backlog_capped` (oldest pending entries are dropped when per-task backlog reaches `AGENT_SPACE_SCHEDULER_PENDING_BACKLOG_LIMIT`, default `240`).
 
 ## Scheduled Action Fails Immediately
 

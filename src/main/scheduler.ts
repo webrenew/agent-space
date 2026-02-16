@@ -101,6 +101,8 @@ const SCHEDULER_MAX_SCAN_MINUTES = 366 * 24 * 60
 const SCHEDULER_TICK_MS = 10_000
 const SCHEDULER_BACKFILL_DEFAULT_WINDOW_MINUTES = 15
 const SCHEDULER_BACKFILL_MAX_WINDOW_MINUTES = 24 * 60
+const SCHEDULER_PENDING_CRON_BACKLOG_DEFAULT_LIMIT = 240
+const SCHEDULER_PENDING_CRON_BACKLOG_MAX_LIMIT = 24 * 60
 const SCHEDULER_RUN_DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000
 const SCHEDULER_FORCE_KILL_TIMEOUT_MS = 10_000
 const SCHEDULER_DISPATCH_DRAIN_TIMEOUT_MS = 5_000
@@ -164,6 +166,30 @@ function resolveSchedulerBackfillWindowMinutes(): number {
   return parsed
 }
 
+function resolveSchedulerPendingCronBacklogLimit(): number {
+  const rawValue = process.env.AGENT_SPACE_SCHEDULER_PENDING_BACKLOG_LIMIT
+  if (!rawValue) return SCHEDULER_PENDING_CRON_BACKLOG_DEFAULT_LIMIT
+
+  const parsed = Number.parseInt(rawValue, 10)
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    logMainEvent('scheduler.tick.invalid_pending_backlog_limit_config', {
+      rawValue,
+      fallbackLimit: SCHEDULER_PENDING_CRON_BACKLOG_DEFAULT_LIMIT,
+    }, 'warn')
+    return SCHEDULER_PENDING_CRON_BACKLOG_DEFAULT_LIMIT
+  }
+
+  if (parsed > SCHEDULER_PENDING_CRON_BACKLOG_MAX_LIMIT) {
+    logMainEvent('scheduler.tick.clamped_pending_backlog_limit_config', {
+      rawValue,
+      parsed,
+      clampedLimit: SCHEDULER_PENDING_CRON_BACKLOG_MAX_LIMIT,
+    }, 'warn')
+    return SCHEDULER_PENDING_CRON_BACKLOG_MAX_LIMIT
+  }
+  return parsed
+}
+
 function resolveSchedulerDispatchDrainTimeoutMs(): number {
   return resolveManagedRuntimeMs({
     envVarName: 'AGENT_SPACE_SCHEDULER_DISPATCH_DRAIN_TIMEOUT_MS',
@@ -191,6 +217,28 @@ export function __testOnlyCanDispatchPendingCronRun(
 
 export function __testOnlyShouldRequeuePendingCronRun(started: boolean, isShuttingDown: boolean): boolean {
   return !started && !isShuttingDown
+}
+
+export function __testOnlyBoundPendingCronQueueByLimit<T>(
+  queue: readonly T[],
+  backlogLimit: number
+): {
+  keptQueue: T[]
+  droppedQueue: T[]
+} {
+  const normalizedLimit = Math.max(1, Number.isFinite(backlogLimit) ? Math.floor(backlogLimit) : 1)
+  if (queue.length <= normalizedLimit) {
+    return {
+      keptQueue: [...queue],
+      droppedQueue: [],
+    }
+  }
+
+  const droppedCount = queue.length - normalizedLimit
+  return {
+    keptQueue: queue.slice(droppedCount),
+    droppedQueue: queue.slice(0, droppedCount),
+  }
 }
 
 function canDispatchPendingCronRun(taskId: string): boolean {
@@ -1072,6 +1120,33 @@ function resolveSchedulerTickWindow(now: Date): {
   }
 }
 
+function applyPendingCronBacklogLimit(task: SchedulerTask, pendingRuns: PendingSchedulerCronRun[], reason: string): void {
+  const backlogLimit = resolveSchedulerPendingCronBacklogLimit()
+  const { keptQueue, droppedQueue } = __testOnlyBoundPendingCronQueueByLimit(pendingRuns, backlogLimit)
+  if (droppedQueue.length === 0) {
+    return
+  }
+
+  pendingRuns.splice(0, pendingRuns.length, ...keptQueue)
+  const droppedOldestMinuteKey = droppedQueue[0]?.minuteKey ?? null
+  const droppedNewestMinuteKey = droppedQueue[droppedQueue.length - 1]?.minuteKey ?? null
+  const keptOldestMinuteKey = keptQueue[0]?.minuteKey ?? null
+  const keptNewestMinuteKey = keptQueue[keptQueue.length - 1]?.minuteKey ?? null
+
+  logMainEvent('scheduler.tick.backlog_capped', {
+    taskId: task.id,
+    taskName: task.name,
+    reason,
+    backlogLimit,
+    droppedRunCount: droppedQueue.length,
+    droppedOldestMinuteKey,
+    droppedNewestMinuteKey,
+    keptOldestMinuteKey,
+    keptNewestMinuteKey,
+    pendingRuns: keptQueue.length,
+  }, 'warn')
+}
+
 function enqueuePendingCronRun(task: SchedulerTask, minuteTimestampMs: number, nowMinuteTimestampMs: number): boolean {
   const runMinuteKey = minuteKey(new Date(minuteTimestampMs))
   const runtime = runtimeByTaskId.get(task.id) ?? createRuntime()
@@ -1087,6 +1162,12 @@ function enqueuePendingCronRun(task: SchedulerTask, minuteTimestampMs: number, n
     minuteKey: runMinuteKey,
   })
   pendingRuns.sort((a, b) => a.minuteTimestampMs - b.minuteTimestampMs)
+  applyPendingCronBacklogLimit(task, pendingRuns, 'enqueue')
+  const isQueued = pendingRuns.some((pending) => pending.minuteKey === runMinuteKey)
+  if (!isQueued) {
+    pendingCronRunsByTaskId.set(task.id, pendingRuns)
+    return false
+  }
   pendingCronRunsByTaskId.set(task.id, pendingRuns)
 
   const backfillMinutes = Math.max(0, Math.floor((nowMinuteTimestampMs - minuteTimestampMs) / 60_000))
@@ -1100,6 +1181,13 @@ function enqueuePendingCronRun(task: SchedulerTask, minuteTimestampMs: number, n
     })
   }
   return true
+}
+
+function requeuePendingCronRun(task: SchedulerTask, run: PendingSchedulerCronRun, reason: string): void {
+  const queue = pendingCronRunsByTaskId.get(task.id) ?? []
+  queue.unshift(run)
+  applyPendingCronBacklogLimit(task, queue, reason)
+  pendingCronRunsByTaskId.set(task.id, queue)
 }
 
 function dispatchPendingCronRun(taskId: string): void {
@@ -1140,15 +1228,11 @@ function dispatchPendingCronRun(taskId: string): void {
   cronDispatchInFlightByTaskId.add(taskId)
   const dispatchPromise = runTask(task, 'cron', runContext).then((started) => {
     if (__testOnlyShouldRequeuePendingCronRun(started, schedulerShuttingDown)) {
-      const queue = pendingCronRunsByTaskId.get(taskId) ?? []
-      queue.unshift(nextRun)
-      pendingCronRunsByTaskId.set(taskId, queue)
+      requeuePendingCronRun(task, nextRun, 'requeue_not_started')
     }
   }).catch((err) => {
     if (!schedulerShuttingDown) {
-      const queue = pendingCronRunsByTaskId.get(taskId) ?? []
-      queue.unshift(nextRun)
-      pendingCronRunsByTaskId.set(taskId, queue)
+      requeuePendingCronRun(task, nextRun, 'requeue_error')
     }
     logMainError('scheduler.tick.run_task_failed', err, {
       taskId: task.id,
@@ -1223,6 +1307,10 @@ async function schedulerTick(): Promise<void> {
     if (queuedRunCount > 0 || tickWindow.clamped) {
       const firstWindowMinute = tickWindow.minuteTimestampsMs[0]
       const lastWindowMinute = tickWindow.minuteTimestampsMs[tickWindow.minuteTimestampsMs.length - 1]
+      let pendingRunCount = 0
+      for (const queue of pendingCronRunsByTaskId.values()) {
+        pendingRunCount += queue.length
+      }
       logMainEvent('scheduler.tick.window_scanned', {
         scannedMinutes: tickWindow.minuteTimestampsMs.length,
         windowStartMinuteKey: typeof firstWindowMinute === 'number' ? minuteKey(new Date(firstWindowMinute)) : null,
@@ -1230,6 +1318,8 @@ async function schedulerTick(): Promise<void> {
         queuedRunCount,
         queuedBackfillRunCount,
         pendingTaskCount: pendingCronRunsByTaskId.size,
+        pendingRunCount,
+        pendingBacklogLimit: resolveSchedulerPendingCronBacklogLimit(),
       })
     }
     lastSuccessfulSchedulerTickAt = now.getTime()
