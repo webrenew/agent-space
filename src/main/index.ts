@@ -138,6 +138,46 @@ patchIpcMainWithTelemetry()
 // Track popped-out chat windows: sessionId → BrowserWindow
 const chatWindows = new Map<string, BrowserWindow>()
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(['https:', 'http:'])
+const DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS = 15_000
+const DEFAULT_SHUTDOWN_TOTAL_TIMEOUT_MS = 60_000
+
+function resolveShutdownTimeoutMs(envVarName: string, fallbackMs: number): number {
+  const rawValue = process.env[envVarName]
+  if (!rawValue) return fallbackMs
+
+  const parsed = Number.parseInt(rawValue, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    logMainEvent('app.shutdown.invalid_timeout_config', {
+      envVarName,
+      rawValue,
+      fallbackMs,
+    }, 'warn')
+    return fallbackMs
+  }
+  return parsed
+}
+
+function resolveShutdownConfig(): { stepTimeoutMs: number; totalTimeoutMs: number } {
+  const stepTimeoutMs = resolveShutdownTimeoutMs(
+    'AGENT_SPACE_SHUTDOWN_STEP_TIMEOUT_MS',
+    DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS
+  )
+  const configuredTotalTimeoutMs = resolveShutdownTimeoutMs(
+    'AGENT_SPACE_SHUTDOWN_TOTAL_TIMEOUT_MS',
+    DEFAULT_SHUTDOWN_TOTAL_TIMEOUT_MS
+  )
+  const minRequiredTotalTimeoutMs = stepTimeoutMs
+  if (configuredTotalTimeoutMs < minRequiredTotalTimeoutMs) {
+    logMainEvent('app.shutdown.total_timeout_clamped', {
+      configuredTotalTimeoutMs,
+      minRequiredTotalTimeoutMs,
+    }, 'warn')
+  }
+  return {
+    stepTimeoutMs,
+    totalTimeoutMs: Math.max(configuredTotalTimeoutMs, minRequiredTotalTimeoutMs),
+  }
+}
 
 function openExternalUrlIfAllowed(url: string, source: 'main_window' | 'chat_popout'): void {
   let parsed: URL
@@ -226,6 +266,54 @@ if (!gotTheLock) {
   let rendererCrashStreakWindowStart = 0
   let shutdownInProgress = false
   let shutdownCompleted = false
+
+  async function runShutdownStepWithTimeout(
+    stepName: string,
+    run: () => Promise<void>,
+    timeoutMs: number
+  ): Promise<{ status: 'completed' | 'failed' | 'timed_out'; durationMs: number; error?: unknown }> {
+    const startedAt = Date.now()
+    let timeoutTimer: NodeJS.Timeout | null = null
+    const stepPromise: Promise<{ status: 'completed' | 'failed'; error?: unknown }> = run()
+      .then(() => ({ status: 'completed' as const }))
+      .catch((error) => ({ status: 'failed', error }))
+    const timeoutPromise = new Promise<{ status: 'timed_out' }>((resolve) => {
+      timeoutTimer = setTimeout(() => {
+        resolve({ status: 'timed_out' })
+      }, timeoutMs)
+    })
+
+    const result = await Promise.race([
+      stepPromise,
+      timeoutPromise,
+    ])
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer)
+      timeoutTimer = null
+    }
+
+    if (result.status === 'timed_out') {
+      void stepPromise.then((lateResult) => {
+        if (lateResult.status === 'failed') {
+          logMainError('app.shutdown.step_late_failure', lateResult.error, {
+            step: stepName,
+            timeoutMs,
+          })
+        } else {
+          logMainEvent('app.shutdown.step_late_completion', {
+            step: stepName,
+            timeoutMs,
+          }, 'warn')
+        }
+      })
+    }
+
+    return {
+      ...result,
+      durationMs: Date.now() - startedAt,
+      ...(result.status === 'failed' ? { error: result.error } : {}),
+    }
+  }
 
   app.on('second-instance', () => {
     recordTelemetryEvent('app.second_instance')
@@ -358,7 +446,10 @@ if (!gotTheLock) {
     })
   }
 
-  async function performCoordinatedShutdown(): Promise<void> {
+  async function performCoordinatedShutdown(options: {
+    shutdownDeadlineAt: number
+    stepTimeoutMs: number
+  }): Promise<void> {
     const shutdownStartedAt = Date.now()
     recordTelemetryEvent('app.shutdown.start')
     logMainEvent('app.shutdown.start')
@@ -380,16 +471,42 @@ if (!gotTheLock) {
     ]
 
     for (const step of shutdownSteps) {
+      const remainingMs = options.shutdownDeadlineAt - Date.now()
+      if (remainingMs <= 0) {
+        logMainEvent('app.shutdown.deadline_exceeded', {
+          elapsedMs: Date.now() - shutdownStartedAt,
+          step: step.name,
+          configuredStepTimeoutMs: options.stepTimeoutMs,
+          deadlineAt: new Date(options.shutdownDeadlineAt).toISOString(),
+        }, 'warn')
+        break
+      }
+
+      const stepTimeoutMs = Math.max(1, Math.min(options.stepTimeoutMs, remainingMs))
       const stepStartedAt = Date.now()
-      logMainEvent('app.shutdown.step.start', { step: step.name })
-      try {
-        await step.run()
+      logMainEvent('app.shutdown.step.start', {
+        step: step.name,
+        timeoutMs: stepTimeoutMs,
+        remainingMs,
+      })
+      const result = await runShutdownStepWithTimeout(step.name, step.run, stepTimeoutMs)
+      if (result.status === 'completed') {
         logMainEvent('app.shutdown.step.completed', {
+          step: step.name,
+          durationMs: result.durationMs,
+        })
+      } else if (result.status === 'timed_out') {
+        logMainEvent('app.shutdown.step.timed_out', {
+          step: step.name,
+          timeoutMs: stepTimeoutMs,
+          durationMs: result.durationMs,
+          elapsedMs: Date.now() - shutdownStartedAt,
+        }, 'warn')
+      } else {
+        logMainError('app.shutdown.step_failed', result.error, {
           step: step.name,
           durationMs: Date.now() - stepStartedAt,
         })
-      } catch (err) {
-        logMainError('app.shutdown.step_failed', err, { step: step.name })
       }
     }
 
@@ -457,12 +574,47 @@ if (!gotTheLock) {
     event.preventDefault()
     if (shutdownInProgress) return
 
+    const shutdownConfig = resolveShutdownConfig()
+    const shutdownDeadlineAt = Date.now() + shutdownConfig.totalTimeoutMs
+    let forceExitTriggered = false
+    let forceExitTimer: NodeJS.Timeout | null = null
+
     shutdownInProgress = true
-    void performCoordinatedShutdown()
+    recordTelemetryEvent('app.shutdown.config', {
+      stepTimeoutMs: shutdownConfig.stepTimeoutMs,
+      totalTimeoutMs: shutdownConfig.totalTimeoutMs,
+    })
+    logMainEvent('app.shutdown.config', {
+      stepTimeoutMs: shutdownConfig.stepTimeoutMs,
+      totalTimeoutMs: shutdownConfig.totalTimeoutMs,
+    })
+
+    forceExitTimer = setTimeout(() => {
+      forceExitTriggered = true
+      shutdownCompleted = true
+      shutdownInProgress = false
+      recordTelemetryEvent('app.shutdown.force_exit', {
+        totalTimeoutMs: shutdownConfig.totalTimeoutMs,
+      })
+      logMainEvent('app.shutdown.force_exit', {
+        totalTimeoutMs: shutdownConfig.totalTimeoutMs,
+      }, 'warn')
+      app.exit(0)
+    }, shutdownConfig.totalTimeoutMs)
+
+    void performCoordinatedShutdown({
+      shutdownDeadlineAt,
+      stepTimeoutMs: shutdownConfig.stepTimeoutMs,
+    })
       .catch((err) => {
         logMainError('app.shutdown.failed', err)
       })
       .finally(() => {
+        if (forceExitTimer) {
+          clearTimeout(forceExitTimer)
+          forceExitTimer = null
+        }
+        if (forceExitTriggered) return
         shutdownCompleted = true
         shutdownInProgress = false
         app.quit()
