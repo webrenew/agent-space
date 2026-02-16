@@ -7,6 +7,35 @@ function appendTail(current: string, text: string, max: number): string {
   return combined.slice(combined.length - max)
 }
 
+const processGroupTerminationByProcess = new WeakMap<ChildProcess, boolean>()
+
+function shouldUseManagedProcessGroup(spawnOptions: SpawnOptions): boolean {
+  if (process.platform === 'win32') return false
+  if (spawnOptions.detached === false) return false
+  return true
+}
+
+function resolveManagedSpawnOptions(spawnOptions: SpawnOptions): {
+  spawnOptions: SpawnOptions
+  useProcessGroup: boolean
+} {
+  const useProcessGroup = shouldUseManagedProcessGroup(spawnOptions)
+  if (!useProcessGroup) {
+    return {
+      spawnOptions,
+      useProcessGroup: false,
+    }
+  }
+
+  return {
+    spawnOptions: {
+      ...spawnOptions,
+      detached: true,
+    },
+    useProcessGroup: true,
+  }
+}
+
 export function resolveManagedRuntimeMs(options: {
   envVarName: string
   defaultMs: number
@@ -43,12 +72,11 @@ export function scheduleManagedForceKill(options: {
   clearManagedForceKillTimer(options.timers, options.key)
   const timer = setTimeout(() => {
     options.timers.delete(options.key)
-    try {
-      if (options.process.exitCode !== null || options.process.signalCode !== null) return
-      options.process.kill('SIGKILL')
+    const sigkillResult = sendSignal(options.process, 'SIGKILL')
+    if (sigkillResult.error) {
+      options.onForceKillFailed(sigkillResult.error)
+    } else if (sigkillResult.sent) {
       options.onForceKill()
-    } catch (error) {
-      options.onForceKillFailed(error)
     }
   }, options.delayMs)
   options.timers.set(options.key, timer)
@@ -121,7 +149,10 @@ function waitForProcessExit(process: ChildProcess, timeoutMs: number): Promise<W
   })
 }
 
-function sendSignal(process: ChildProcess, signal: NodeJS.Signals): { sent: boolean; error: unknown | null } {
+function sendSignalDirect(
+  process: ChildProcess,
+  signal: NodeJS.Signals
+): { sent: boolean; error: unknown | null } {
   if (hasProcessExited(process)) {
     return { sent: false, error: null }
   }
@@ -135,6 +166,30 @@ function sendSignal(process: ChildProcess, signal: NodeJS.Signals): { sent: bool
   } catch (error) {
     return { sent: false, error }
   }
+}
+
+function sendSignal(process: ChildProcess, signal: NodeJS.Signals): { sent: boolean; error: unknown | null } {
+  if (hasProcessExited(process)) {
+    return { sent: false, error: null }
+  }
+
+  const useProcessGroup = processGroupTerminationByProcess.get(process) === true
+  if (useProcessGroup && typeof process.pid === 'number' && process.pid > 0) {
+    try {
+      globalThis.process.kill(-process.pid, signal)
+      return { sent: true, error: null }
+    } catch (error) {
+      const candidate = error as NodeJS.ErrnoException
+      if (candidate?.code === 'ESRCH') {
+        return { sent: false, error: null }
+      }
+      const fallbackResult = sendSignalDirect(process, signal)
+      if (!fallbackResult.error) return fallbackResult
+      return { sent: false, error: fallbackResult.error }
+    }
+  }
+
+  return sendSignalDirect(process, signal)
 }
 
 export interface TerminateManagedProcessOptions {
@@ -254,9 +309,11 @@ export async function runManagedProcess(
   const stdoutLimit = options.stdoutTailMaxChars ?? 8_000
   const stderrLimit = options.stderrTailMaxChars ?? 8_000
 
+  const managedSpawn = resolveManagedSpawnOptions(options.spawnOptions)
   let processRef: ChildProcess
   try {
-    processRef = spawn(options.command, options.args ?? [], options.spawnOptions)
+    processRef = spawn(options.command, options.args ?? [], managedSpawn.spawnOptions)
+    processGroupTerminationByProcess.set(processRef, managedSpawn.useProcessGroup)
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error))
     return {
@@ -308,19 +365,18 @@ export async function runManagedProcess(
     resultError = options.timeoutErrorMessage
     options.onTimeout?.()
 
-    try {
-      processRef.kill('SIGTERM')
-    } catch (error) {
-      options.onTimeoutSigtermFailed?.(error)
+    const sigtermResult = sendSignal(processRef, 'SIGTERM')
+    if (sigtermResult.error) {
+      options.onTimeoutSigtermFailed?.(sigtermResult.error)
     }
 
     forceKillTimer = setTimeout(() => {
-      try {
-        if (processRef.exitCode !== null || processRef.signalCode !== null) return
-        processRef.kill('SIGKILL')
+      if (processRef.exitCode !== null || processRef.signalCode !== null) return
+      const sigkillResult = sendSignal(processRef, 'SIGKILL')
+      if (sigkillResult.error) {
+        options.onForceKillFailed?.(sigkillResult.error)
+      } else if (sigkillResult.sent) {
         options.onForceKill?.()
-      } catch (error) {
-        options.onForceKillFailed?.(error)
       }
     }, options.forceKillTimeoutMs)
   }, options.maxRuntimeMs)
@@ -351,6 +407,7 @@ export async function runManagedProcess(
       settled = true
       clearTimers()
       rl?.close()
+      processGroupTerminationByProcess.delete(processRef)
       resolve({
         exitCode: payload.exitCode,
         signalCode: payload.signalCode,
