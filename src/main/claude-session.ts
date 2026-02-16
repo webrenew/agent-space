@@ -28,12 +28,42 @@ interface ActiveSession {
   readline: ReadlineInterface
   sessionId: string
   didEmitResult: boolean
+  runtimeTimeout: NodeJS.Timeout | null
+  forceKillTimeout: NodeJS.Timeout | null
+  timeoutError: string | null
 }
 
 // ── State ──────────────────────────────────────────────────────────────
 
 const activeSessions = new Map<string, ActiveSession>()
 let sessionCounter = 0
+
+const CLAUDE_SESSION_DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000
+const CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS = 5_000
+
+function resolveSessionMaxRuntimeMs(): number {
+  const raw = process.env.AGENT_SPACE_CLAUDE_MAX_RUNTIME_MS
+  if (!raw) return CLAUDE_SESSION_DEFAULT_MAX_RUNTIME_MS
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[claude-session] Invalid AGENT_SPACE_CLAUDE_MAX_RUNTIME_MS=${raw}; using default ${CLAUDE_SESSION_DEFAULT_MAX_RUNTIME_MS}`
+    )
+    return CLAUDE_SESSION_DEFAULT_MAX_RUNTIME_MS
+  }
+  return parsed
+}
+
+function clearSessionTimers(session: ActiveSession): void {
+  if (session.runtimeTimeout) {
+    clearTimeout(session.runtimeTimeout)
+    session.runtimeTimeout = null
+  }
+  if (session.forceKillTimeout) {
+    clearTimeout(session.forceKillTimeout)
+    session.forceKillTimeout = null
+  }
+}
 
 // ── Resolve Claude CLI binary ─────────────────────────────────────────
 
@@ -400,8 +430,44 @@ function startSession(options: ClaudeSessionOptions): string {
     readline: rl,
     sessionId,
     didEmitResult: false,
+    runtimeTimeout: null,
+    forceKillTimeout: null,
+    timeoutError: null,
   }
   activeSessions.set(sessionId, session)
+
+  const maxRuntimeMs = resolveSessionMaxRuntimeMs()
+  session.runtimeTimeout = setTimeout(() => {
+    const liveSession = activeSessions.get(sessionId)
+    if (!liveSession) return
+    if (liveSession.process.exitCode !== null || liveSession.process.signalCode !== null) return
+
+    const timeoutSeconds = Math.max(1, Math.round(maxRuntimeMs / 1000))
+    liveSession.timeoutError = `Session timed out after ${timeoutSeconds}s`
+    emitEvent({
+      sessionId,
+      type: 'error',
+      data: { message: liveSession.timeoutError },
+    })
+
+    try {
+      liveSession.process.kill('SIGTERM')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[claude-session] Failed to SIGTERM timed-out session ${sessionId}: ${message}`)
+    }
+
+    liveSession.forceKillTimeout = setTimeout(() => {
+      const active = activeSessions.get(sessionId)
+      if (!active) return
+      try {
+        if (active.process.exitCode !== null || active.process.signalCode !== null) return
+        active.process.kill('SIGKILL')
+      } catch {
+        // Process already dead.
+      }
+    }, CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS)
+  }, maxRuntimeMs)
 
   // Parse each JSONL line from stdout
   rl.on('line', (line: string) => {
@@ -430,11 +496,13 @@ function startSession(options: ClaudeSessionOptions): string {
       type: 'error',
       data: { message: `Process error: ${err.message}` },
     })
+    clearSessionTimers(session)
     activeSessions.delete(sessionId)
   })
 
   proc.on('exit', (code: number | null, signal: string | null) => {
     rl.close()
+    clearSessionTimers(session)
 
     // If we didn't already send a result event, send one now
     if (code !== 0 && stderrBuffer.trim()) {
@@ -454,7 +522,8 @@ function startSession(options: ClaudeSessionOptions): string {
         type: 'result',
         data: {
           result: '',
-          is_error: code !== 0,
+          is_error: code !== 0 || Boolean(session.timeoutError),
+          error: session.timeoutError ?? undefined,
           session_id: sessionId,
         },
       })
@@ -470,6 +539,8 @@ function stopSession(sessionId: string): void {
   const session = activeSessions.get(sessionId)
   if (!session) return
 
+  clearSessionTimers(session)
+
   // Force kill after 5s if SIGTERM doesn't work
   const forceKillTimer = setTimeout(() => {
     try {
@@ -477,7 +548,7 @@ function stopSession(sessionId: string): void {
     } catch {
       // Process already dead — expected
     }
-  }, 5000)
+  }, CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS)
 
   // Register exit handler BEFORE sending kill signal to avoid race
   session.process.once('exit', () => {
