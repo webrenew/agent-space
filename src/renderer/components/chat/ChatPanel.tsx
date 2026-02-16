@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { ChatMessage, ClaudeEvent, WorkspaceContextSnapshot } from '../../types'
+import type { ChatMessage, ClaudeEvent } from '../../types'
 import { randomAppearance } from '../../types'
 import { useAgentStore } from '../../store/agents'
 import { useWorkspaceStore } from '../../store/workspace'
@@ -8,7 +8,6 @@ import { useSettingsStore } from '../../store/settings'
 import { useChatHistoryStore } from '../../store/chatHistory'
 import { matchScope } from '../../lib/scopeMatcher'
 import { playChatCompletionDing } from '../../lib/soundPlayer'
-import { buildWorkspaceContextPrompt } from '../../lib/workspaceContext'
 import { computeRunReward } from '../../lib/rewardEngine'
 import { logRendererEvent } from '../../lib/diagnostics'
 import { resolveClaudeProfile } from '../../lib/claudeProfile'
@@ -21,6 +20,12 @@ import {
 import { ChatMessageBubble } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import {
+  parseSlashCommandInput,
+  prepareChatPrompt,
+  resolveMentionedFilesWithSearch,
+  resolveMentionTokens,
+} from './chatPromptPipeline'
+import {
   createClaudeEventHandlerRegistry,
   routeClaudeEvent,
   type SessionStatus,
@@ -30,77 +35,11 @@ interface ChatPanelProps {
   chatSessionId: string
 }
 
-const BINARY_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg', 'tiff', 'psd',
-  'pdf', 'zip', 'tar', 'gz', 'rar', '7z',
-  'mp3', 'mp4', 'wav', 'mov', 'avi', 'mkv', 'flac',
-  'exe', 'dll', 'so', 'dylib', 'wasm',
-  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-  'dmg', 'iso', 'bin',
-])
-const MENTION_PATTERN = /(?:^|\s)@{([^}\n]+)}|(?:^|\s)@([^\s@]+)/g
-const MAX_REFERENCED_FILES = 12
-
 let chatMessageCounter = 0
 let chatAgentCounter = 0
 
 function nextMessageId(): string {
   return `msg-${++chatMessageCounter}`
-}
-
-function normalizeMentionPath(value: string): string {
-  return value
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\.\/+/, '')
-    .replace(/^\/+/, '')
-}
-
-function toForwardSlashes(value: string): string {
-  return value.replace(/\\/g, '/')
-}
-
-function toRelativePathIfInside(rootDir: string, absolutePath: string): string | null {
-  const normalizedRoot = toForwardSlashes(rootDir).replace(/\/+$/, '')
-  const normalizedPath = toForwardSlashes(absolutePath)
-  if (normalizedPath === normalizedRoot) return ''
-  if (normalizedPath.startsWith(`${normalizedRoot}/`)) {
-    return normalizedPath.slice(normalizedRoot.length + 1)
-  }
-  return null
-}
-
-function extractMentionPaths(message: string): string[] {
-  const mentions: string[] = []
-  const seen = new Set<string>()
-  for (const match of message.matchAll(MENTION_PATTERN)) {
-    const raw = match[1] ?? match[2] ?? ''
-    const normalized = normalizeMentionPath(raw)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    mentions.push(normalized)
-  }
-  return mentions
-}
-
-function parseSlashCommandInput(message: string): {
-  name: string
-  argsRaw: string
-  args: string[]
-} | null {
-  const trimmed = message.trim()
-  if (!trimmed.startsWith('/')) return null
-  if (trimmed.startsWith('//')) return null
-  const firstSpace = trimmed.indexOf(' ')
-  const token = firstSpace >= 0 ? trimmed.slice(1, firstSpace) : trimmed.slice(1)
-  const name = token.trim()
-  if (!name) return null
-  const argsRaw = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : ''
-  return {
-    name,
-    argsRaw,
-    args: argsRaw ? argsRaw.split(/\s+/).filter(Boolean) : [],
-  }
 }
 
 interface UsageSnapshot {
@@ -669,317 +608,251 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   ])
 
   const resolveMentionedFiles = useCallback(async (rootDir: string, mentions: string[]) => {
-    const normalizedMentions = Array.from(
-      new Set(mentions.map((mention) => normalizeMentionPath(mention).toLowerCase()))
+    return resolveMentionedFilesWithSearch(
+      rootDir,
+      mentions,
+      async (searchRoot, query, limit) => window.electronAPI.fs.search(searchRoot, query, limit),
+      (mention, error) => {
+        console.error(`[ChatPanel] Failed to resolve @${mention}:`, error)
+      }
     )
-      .filter(Boolean)
-      .slice(0, MAX_REFERENCED_FILES)
-
-    if (normalizedMentions.length === 0) {
-      return {
-        resolved: [] as Array<{ mention: string; path: string; relPath: string }>,
-        unresolved: [] as string[],
-      }
-    }
-
-    const lookups = await Promise.all(
-      normalizedMentions.map(async (mention) => {
-        try {
-          const hits = await window.electronAPI.fs.search(rootDir, mention, 25)
-          return { mention, hits }
-        } catch (err) {
-          console.error(`[ChatPanel] Failed to resolve @${mention}:`, err)
-          return {
-            mention,
-            hits: [] as Array<{ path: string; name: string; isDirectory: boolean }>,
-          }
-        }
-      })
-    )
-
-    const resolved: Array<{ mention: string; path: string; relPath: string }> = []
-    const unresolved: string[] = []
-    const seenPaths = new Set<string>()
-
-    for (const { mention, hits } of lookups) {
-      let bestMatch: { path: string; relPath: string; score: number } | null = null
-
-      for (let i = 0; i < hits.length; i++) {
-        const hit = hits[i]
-        if (hit.isDirectory) continue
-
-        const relPathRaw = toRelativePathIfInside(rootDir, hit.path) ?? hit.name
-        const relPath = normalizeMentionPath(relPathRaw)
-        if (!relPath) continue
-
-        const relLower = relPath.toLowerCase()
-        const nameLower = hit.name.toLowerCase()
-        let score = 0
-
-        if (relLower === mention) score += 500
-        if (relLower.endsWith(`/${mention}`)) score += 320
-        if (nameLower === mention) score += 220
-        if (relLower.includes(mention)) score += 100
-        score += Math.max(0, 30 - i)
-
-        if (!bestMatch || score > bestMatch.score) {
-          bestMatch = { path: hit.path, relPath, score }
-        }
-      }
-
-      if (!bestMatch) {
-        unresolved.push(mention)
-        continue
-      }
-      if (seenPaths.has(bestMatch.path)) continue
-      seenPaths.add(bestMatch.path)
-      resolved.push({
-        mention,
-        path: bestMatch.path,
-        relPath: bestMatch.relPath,
-      })
-    }
-
-    return { resolved, unresolved }
   }, [])
 
-  const handleSend = useCallback(
-    async (message: string, files?: File[], mentions?: string[]) => {
-      let effectiveWorkingDir = workingDir
-      if (!effectiveWorkingDir) {
-        try {
-          const selected = await window.electronAPI.fs.openFolderDialog()
-          if (!selected) {
-            addToast({
-              type: 'error',
-              message: 'Select a folder before starting this chat.',
-            })
-            return
-          }
-          applyDirectorySelection(selected)
-          effectiveWorkingDir = selected
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err)
-          addToast({
-            type: 'error',
-            message: `Failed to choose folder: ${errMsg}`,
-          })
-          return
-        }
-      }
+  const resolveEffectiveWorkingDir = useCallback(async (): Promise<string | null> => {
+    if (workingDir) return workingDir
 
-      const slashCommand = parseSlashCommandInput(message)
-      if (slashCommand) {
-        const mentionTokens = mentions && mentions.length > 0
-          ? mentions
-          : extractMentionPaths(message)
-        const now = Date.now()
-        void emitPluginHook('message_received', {
-          chatSessionId,
-          workspaceDirectory: effectiveWorkingDir,
-          agentId: agentIdRef.current,
-          timestamp: now,
-          message: truncateForHook(message),
-          messageLength: message.length,
-          mentionCount: mentionTokens.length,
-          attachmentCount: files?.length ?? 0,
+    try {
+      const selected = await window.electronAPI.fs.openFolderDialog()
+      if (!selected) {
+        addToast({
+          type: 'error',
+          message: 'Select a folder before starting this chat.',
         })
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nextMessageId(),
-            role: 'user',
-            content: message,
-            timestamp: now,
-          },
-        ])
-        persistMessage(message, 'user', { directory: effectiveWorkingDir })
-
-        const commandResult = await invokePluginCommand(slashCommand.name, {
-          chatSessionId,
-          workspaceDirectory: effectiveWorkingDir,
-          agentId: agentIdRef.current,
-          rawMessage: message,
-          argsRaw: slashCommand.argsRaw,
-          args: slashCommand.args,
-          attachmentNames: files?.map((file) => file.name) ?? [],
-          mentionPaths: mentionTokens,
-        })
-
-        if (!commandResult.handled) {
-          const knownCommands = getRegisteredPluginCommands()
-          const commandsPreview = knownCommands.slice(0, 6).map((entry) => `/${entry.name}`)
-          const hint = knownCommands.length > 0
-            ? `Available commands: ${commandsPreview.join(', ')}${knownCommands.length > 6 ? ', ...' : ''}`
-            : 'No plugin commands are currently loaded.'
-          const messageText = `Unknown command "/${slashCommand.name}". ${hint}`
-          void emitPluginHook('message_sent', {
-            chatSessionId,
-            workspaceDirectory: effectiveWorkingDir,
-            agentId: agentIdRef.current,
-            timestamp: Date.now(),
-            role: 'error',
-            message: truncateForHook(messageText),
-            messageLength: messageText.length,
-          })
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: nextMessageId(),
-              role: 'error',
-              content: messageText,
-              timestamp: Date.now(),
-            },
-          ])
-          return
-        }
-
-        const responseText = commandResult.message
-        if (responseText) {
-          const responseRole: 'assistant' | 'error' = commandResult.isError ? 'error' : 'assistant'
-          void emitPluginHook('message_sent', {
-            chatSessionId,
-            workspaceDirectory: effectiveWorkingDir,
-            agentId: agentIdRef.current,
-            timestamp: Date.now(),
-            role: responseRole,
-            message: truncateForHook(responseText),
-            messageLength: responseText.length,
-          })
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: nextMessageId(),
-              role: responseRole,
-              content: responseText,
-              timestamp: Date.now(),
-            },
-          ])
-          if (!commandResult.isError) {
-            persistMessage(responseText, 'assistant', { directory: effectiveWorkingDir })
-          }
-        }
-        return
+        return null
       }
+      applyDirectorySelection(selected)
+      return selected
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      addToast({
+        type: 'error',
+        message: `Failed to choose folder: ${errMsg}`,
+      })
+      return null
+    }
+  }, [addToast, applyDirectorySelection, workingDir])
 
-      // Build the prompt with file + workspace context
-      let prompt = message
-      const mentionTokens = mentions && mentions.length > 0
-        ? mentions
-        : extractMentionPaths(message)
-      const referenceNotes: string[] = []
-      let resolvedMentionCount = 0
-      let unresolvedMentionCount = 0
+  const appendUserMessageAndEmitHook = useCallback((
+    message: string,
+    workingDirectory: string,
+    mentionCount: number,
+    attachmentCount: number
+  ) => {
+    const timestamp = Date.now()
+    void emitPluginHook('message_received', {
+      chatSessionId,
+      workspaceDirectory: workingDirectory,
+      agentId: agentIdRef.current,
+      timestamp,
+      message: truncateForHook(message),
+      messageLength: message.length,
+      mentionCount,
+      attachmentCount,
+    })
 
-      let workspaceSnapshot: WorkspaceContextSnapshot | null = null
-      try {
-        workspaceSnapshot = await window.electronAPI.context.getWorkspaceSnapshot(effectiveWorkingDir)
-        upsertWorkspaceSnapshot(workspaceSnapshot)
-      } catch (err) {
-        logRendererEvent('warn', 'chat.workspace_snapshot_failed', {
-          chatSessionId,
-          workingDirectory: effectiveWorkingDir,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: nextMessageId(),
+        role: 'user',
+        content: message,
+        timestamp,
+      },
+    ])
+    persistMessage(message, 'user', { directory: workingDirectory })
+  }, [chatSessionId, persistMessage])
 
-      if (mentionTokens.length > 0 && effectiveWorkingDir) {
-        const { resolved, unresolved } = await resolveMentionedFiles(effectiveWorkingDir, mentionTokens)
-        resolvedMentionCount = resolved.length
-        unresolvedMentionCount = unresolved.length
-        const referencedContents: string[] = []
+  const handleSlashCommandSend = useCallback(async (input: {
+    message: string
+    slashCommand: { name: string; argsRaw: string; args: string[] }
+    workingDirectory: string
+    files?: File[]
+    mentions?: string[]
+  }) => {
+    const mentionTokens = resolveMentionTokens(input.message, input.mentions)
+    appendUserMessageAndEmitHook(
+      input.message,
+      input.workingDirectory,
+      mentionTokens.length,
+      input.files?.length ?? 0
+    )
 
-        for (const ref of resolved) {
-          try {
-            const fileData = await window.electronAPI.fs.readFile(ref.path)
-            const safeText = fileData.content.replace(/\0/g, '')
-            referencedContents.push(`\n--- Referenced file: ${ref.relPath} ---\n${safeText}\n--- End: ${ref.relPath} ---`)
-            if (fileData.truncated) {
-              referenceNotes.push(`${ref.relPath} (truncated to 2MB preview)`)
-            }
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err)
-            referenceNotes.push(`${ref.relPath} (failed to read: ${errMsg})`)
-          }
-        }
+    const commandResult = await invokePluginCommand(input.slashCommand.name, {
+      chatSessionId,
+      workspaceDirectory: input.workingDirectory,
+      agentId: agentIdRef.current,
+      rawMessage: input.message,
+      argsRaw: input.slashCommand.argsRaw,
+      args: input.slashCommand.args,
+      attachmentNames: input.files?.map((file) => file.name) ?? [],
+      mentionPaths: mentionTokens,
+    })
 
-        if (referencedContents.length > 0) {
-          prompt = `${prompt}\n\nReferenced files via @:${referencedContents.join('\n')}`
-        }
-        if (unresolved.length > 0) {
-          referenceNotes.push(`Unresolved @ references: ${unresolved.map((entry) => `@${entry}`).join(', ')}`)
-        }
-      }
-
-      if (files && files.length > 0) {
-        const fileContents: string[] = []
-        const binaryFiles: string[] = []
-
-        for (const file of files) {
-          try {
-            const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-            if (BINARY_EXTENSIONS.has(ext)) {
-              // Binary file — note it but don't inline content
-              binaryFiles.push(file.name)
-              continue
-            }
-            const text = await file.text()
-            // Strip null bytes from text files (safety)
-            const safeText = text.replace(/\0/g, '')
-            fileContents.push(`\n--- File: ${file.name} ---\n${safeText}\n--- End: ${file.name} ---`)
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err)
-            console.error(`Failed to read file ${file.name}: ${errMsg}`)
-          }
-        }
-        if (fileContents.length > 0) {
-          prompt = `${prompt}\n\nAttached files:${fileContents.join('\n')}`
-        }
-        if (binaryFiles.length > 0) {
-          prompt = `${prompt}\n\n[Attached binary files: ${binaryFiles.join(', ')} — binary content cannot be sent via CLI]`
-        }
-      }
-      if (referenceNotes.length > 0) {
-        prompt = `${prompt}\n\n[Reference notes: ${referenceNotes.join(' | ')}]`
-      }
-
-      if (workspaceSnapshot) {
-        prompt = `${prompt}\n\n${buildWorkspaceContextPrompt(workspaceSnapshot)}`
-      }
-
-      void emitPluginHook('message_received', {
+    if (!commandResult.handled) {
+      const knownCommands = getRegisteredPluginCommands()
+      const commandsPreview = knownCommands.slice(0, 6).map((entry) => `/${entry.name}`)
+      const hint = knownCommands.length > 0
+        ? `Available commands: ${commandsPreview.join(', ')}${knownCommands.length > 6 ? ', ...' : ''}`
+        : 'No plugin commands are currently loaded.'
+      const messageText = `Unknown command "/${input.slashCommand.name}". ${hint}`
+      void emitPluginHook('message_sent', {
         chatSessionId,
-        workspaceDirectory: effectiveWorkingDir,
+        workspaceDirectory: input.workingDirectory,
         agentId: agentIdRef.current,
         timestamp: Date.now(),
-        message: truncateForHook(message),
-        messageLength: message.length,
-        mentionCount: mentionTokens.length,
-        attachmentCount: files?.length ?? 0,
+        role: 'error',
+        message: truncateForHook(messageText),
+        messageLength: messageText.length,
       })
-
-      // Add user message to chat
       setMessages((prev) => [
         ...prev,
         {
           id: nextMessageId(),
-          role: 'user',
-          content: message,
+          role: 'error',
+          content: messageText,
           timestamp: Date.now(),
         },
       ])
+      return
+    }
 
-      // Persist user message to memories
-      persistMessage(message, 'user', { directory: effectiveWorkingDir })
+    const responseText = commandResult.message
+    if (!responseText) return
+
+    const responseRole: 'assistant' | 'error' = commandResult.isError ? 'error' : 'assistant'
+    void emitPluginHook('message_sent', {
+      chatSessionId,
+      workspaceDirectory: input.workingDirectory,
+      agentId: agentIdRef.current,
+      timestamp: Date.now(),
+      role: responseRole,
+      message: truncateForHook(responseText),
+      messageLength: responseText.length,
+    })
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: nextMessageId(),
+        role: responseRole,
+        content: responseText,
+        timestamp: Date.now(),
+      },
+    ])
+    if (!commandResult.isError) {
+      persistMessage(responseText, 'assistant', { directory: input.workingDirectory })
+    }
+  }, [appendUserMessageAndEmitHook, chatSessionId, persistMessage])
+
+  const ensureChatAgentForRun = useCallback((message: string): string => {
+    let agentId = agentIdRef.current
+    if (agentId) {
+      updateAgent(agentId, {
+        status: 'thinking',
+        currentTask: message.slice(0, 60),
+        isClaudeRunning: true,
+      })
+      return agentId
+    }
+
+    agentId = `chat-agent-${++chatAgentCounter}-${Date.now()}`
+    agentIdRef.current = agentId
+    const deskIndex = getNextDeskIndex()
+    const agentNum = chatAgentCounter
+
+    addAgent({
+      id: agentId,
+      name: `Agent ${agentNum}`,
+      agent_type: 'chat',
+      status: 'thinking',
+      currentTask: message.slice(0, 60),
+      model: '',
+      tokens_input: 0,
+      tokens_output: 0,
+      files_modified: 0,
+      started_at: Date.now(),
+      deskIndex,
+      terminalId: agentId,
+      isClaudeRunning: true,
+      appearance: randomAppearance(),
+      commitCount: 0,
+      activeCelebration: null,
+      celebrationStartedAt: null,
+      sessionStats: {
+        tokenHistory: [],
+        peakInputRate: 0,
+        peakOutputRate: 0,
+        tokensByModel: {},
+      },
+    })
+
+    updateChatSession(chatSessionId, { agentId })
+    addEvent({
+      agentId,
+      agentName: `Agent ${agentNum}`,
+      type: 'spawn',
+      description: 'Chat session started',
+    })
+
+    const capturedAgentId = agentId
+    window.electronAPI.agent.generateMeta(message).then((meta) => {
+      updateAgent(capturedAgentId, {
+        name: meta.name,
+        currentTask: meta.taskDescription,
+      })
+      updateChatSession(chatSessionId, { label: meta.name })
+    }).catch(() => { /* fallback name stays */ })
+
+    return agentId
+  }, [addAgent, addEvent, chatSessionId, getNextDeskIndex, updateAgent, updateChatSession])
+
+  const handleClaudePromptSend = useCallback(
+    async (message: string, workingDirectory: string, files?: File[], mentions?: string[]) => {
+      const promptPreparation = await prepareChatPrompt(
+        {
+          message,
+          workingDirectory,
+          files,
+          mentions,
+        },
+        {
+          getWorkspaceSnapshot: (directory) => window.electronAPI.context.getWorkspaceSnapshot(directory),
+          upsertWorkspaceSnapshot,
+          onWorkspaceSnapshotError: (error) => {
+            logRendererEvent('warn', 'chat.workspace_snapshot_failed', {
+              chatSessionId,
+              workingDirectory,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          },
+          resolveMentionedFiles,
+          readReferencedFile: (path) => window.electronAPI.fs.readFile(path),
+        }
+      )
+
+      appendUserMessageAndEmitHook(
+        message,
+        workingDirectory,
+        promptPreparation.mentionTokens.length,
+        files?.length ?? 0
+      )
 
       const promptTransformResult = await applyPluginPromptTransforms({
         chatSessionId,
-        workspaceDirectory: effectiveWorkingDir,
+        workspaceDirectory: workingDirectory,
         agentId: agentIdRef.current,
         rawMessage: message,
-        prompt,
-        mentionCount: mentionTokens.length,
+        prompt: promptPreparation.prompt,
+        mentionCount: promptPreparation.mentionTokens.length,
         attachmentCount: files?.length ?? 0,
       })
       if (promptTransformResult.canceled) {
@@ -987,7 +860,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
           ?? 'Request canceled by a plugin prompt transformer.'
         void emitPluginHook('message_sent', {
           chatSessionId,
-          workspaceDirectory: effectiveWorkingDir,
+          workspaceDirectory: workingDirectory,
           agentId: agentIdRef.current,
           timestamp: Date.now(),
           role: 'error',
@@ -1007,15 +880,14 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       }
 
       const promptForSend = promptTransformResult.prompt
-
       setStatus('running')
-      activeRunDirectoryRef.current = effectiveWorkingDir
+      activeRunDirectoryRef.current = workingDirectory
       runStartedAtRef.current = Date.now()
       runContextFilesRef.current =
-        resolvedMentionCount
+        promptPreparation.resolvedMentionCount
         + (files?.length ?? 0)
-        + Math.min(workspaceSnapshot?.keyFiles.length ?? 0, 6)
-      runUnresolvedMentionsRef.current = unresolvedMentionCount
+        + Math.min(promptPreparation.workspaceSnapshot?.keyFiles.length ?? 0, 6)
+      runUnresolvedMentionsRef.current = promptPreparation.unresolvedMentionCount
       runToolCallCountRef.current = 0
       runFileWriteCountRef.current = 0
       runYoloModeRef.current = yoloMode
@@ -1024,79 +896,17 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
 
       setChatContextSnapshot({
         chatSessionId,
-        workspaceDirectory: effectiveWorkingDir,
+        workspaceDirectory: workingDirectory,
         contextFiles: runContextFilesRef.current,
-        unresolvedMentions: unresolvedMentionCount,
-        generatedAt: workspaceSnapshot?.generatedAt ?? Date.now(),
-        gitBranch: workspaceSnapshot?.gitBranch ?? null,
-        gitDirtyFiles: workspaceSnapshot?.gitDirtyFiles ?? 0,
+        unresolvedMentions: promptPreparation.unresolvedMentionCount,
+        generatedAt: promptPreparation.workspaceSnapshot?.generatedAt ?? Date.now(),
+        gitBranch: promptPreparation.workspaceSnapshot?.gitBranch ?? null,
+        gitDirtyFiles: promptPreparation.workspaceSnapshot?.gitDirtyFiles ?? 0,
       })
-      const profileForRun = resolveClaudeProfile(claudeProfilesConfig, effectiveWorkingDir)
+      const profileForRun = resolveClaudeProfile(claudeProfilesConfig, workingDirectory)
+      const agentId = ensureChatAgentForRun(message)
 
-      // Reuse existing agent for this chat, or spawn one on first message
-      let agentId = agentIdRef.current
-      if (agentId) {
-        // Reuse — just update status back to active
-        updateAgent(agentId, {
-          status: 'thinking',
-          currentTask: message.slice(0, 60),
-          isClaudeRunning: true,
-        })
-      } else {
-        // First message — spawn a 3D agent with placeholder name
-        agentId = `chat-agent-${++chatAgentCounter}-${Date.now()}`
-        agentIdRef.current = agentId
-        const deskIndex = getNextDeskIndex()
-        const agentNum = chatAgentCounter
-
-        addAgent({
-          id: agentId,
-          name: `Agent ${agentNum}`,
-          agent_type: 'chat',
-          status: 'thinking',
-          currentTask: message.slice(0, 60),
-          model: '',
-          tokens_input: 0,
-          tokens_output: 0,
-          files_modified: 0,
-          started_at: Date.now(),
-          deskIndex,
-          terminalId: agentId,
-          isClaudeRunning: true,
-          appearance: randomAppearance(),
-          commitCount: 0,
-          activeCelebration: null,
-          celebrationStartedAt: null,
-          sessionStats: {
-            tokenHistory: [],
-            peakInputRate: 0,
-            peakOutputRate: 0,
-            tokensByModel: {},
-          },
-        })
-
-        // Link agent to chat session
-        updateChatSession(chatSessionId, { agentId })
-
-        addEvent({
-          agentId,
-          agentName: `Agent ${agentNum}`,
-          type: 'spawn',
-          description: 'Chat session started',
-        })
-
-        // Background: generate creative name + task description
-        const capturedAgentId = agentId
-        window.electronAPI.agent.generateMeta(message).then((meta) => {
-          updateAgent(capturedAgentId, {
-            name: meta.name,
-            currentTask: meta.taskDescription,
-          })
-          updateChatSession(chatSessionId, { label: meta.name })
-        }).catch(() => { /* fallback name stays */ })
-      }
-
-      const currentAgent = useAgentStore.getState().agents.find((a) => a.id === agentId)
+      const currentAgent = useAgentStore.getState().agents.find((agent) => agent.id === agentId)
       runTokenBaselineRef.current = {
         input: currentAgent?.tokens_input ?? 0,
         output: currentAgent?.tokens_output ?? 0,
@@ -1104,7 +914,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       runModelBaselineRef.current = cloneTokensByModel(currentAgent?.sessionStats.tokensByModel ?? {})
       const beforeAgentStartPayload = {
         chatSessionId,
-        workspaceDirectory: effectiveWorkingDir,
+        workspaceDirectory: workingDirectory,
         agentId,
         timestamp: Date.now(),
         promptPreview: truncateForHook(promptForSend, 240),
@@ -1118,12 +928,12 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       void emitPluginHook('before_agent_start', beforeAgentStartPayload)
       void emitPluginHook('message_sending', {
         chatSessionId,
-        workspaceDirectory: effectiveWorkingDir,
+        workspaceDirectory: workingDirectory,
         agentId,
         timestamp: Date.now(),
         promptPreview: truncateForHook(promptForSend, 240),
         promptLength: promptForSend.length,
-        mentionCount: mentionTokens.length,
+        mentionCount: promptPreparation.mentionTokens.length,
         attachmentCount: files?.length ?? 0,
         transformed: promptTransformResult.transformed,
       })
@@ -1131,12 +941,12 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       try {
         const result = await window.electronAPI.claude.start({
           prompt: promptForSend,
-          workingDirectory: effectiveWorkingDir ?? undefined,
+          workingDirectory,
           dangerouslySkipPermissions: yoloMode,
         })
         setActiveClaudeSession(result.sessionId)
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err)
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error)
         console.error(`Failed to start Claude session: ${errMsg}`)
         setMessages((prev) => [
           ...prev,
@@ -1157,24 +967,37 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       }
     },
     [
-      addAgent,
-      addEvent,
-      addToast,
-      applyDirectorySelection,
+      appendUserMessageAndEmitHook,
       chatSessionId,
+      claudeProfilesConfig,
+      ensureChatAgentForRun,
       finalizeRunReward,
-      getNextDeskIndex,
-      persistMessage,
-      removeAgent,
-      setChatContextSnapshot,
-      upsertWorkspaceSnapshot,
-      updateAgent,
-      updateChatSession,
       resolveMentionedFiles,
-      workingDir,
+      setChatContextSnapshot,
+      updateAgent,
+      upsertWorkspaceSnapshot,
       yoloMode,
     ]
   )
+
+  const handleSend = useCallback(async (message: string, files?: File[], mentions?: string[]) => {
+    const effectiveWorkingDir = await resolveEffectiveWorkingDir()
+    if (!effectiveWorkingDir) return
+
+    const slashCommand = parseSlashCommandInput(message)
+    if (slashCommand) {
+      await handleSlashCommandSend({
+        message,
+        slashCommand,
+        workingDirectory: effectiveWorkingDir,
+        files,
+        mentions,
+      })
+      return
+    }
+
+    await handleClaudePromptSend(message, effectiveWorkingDir, files, mentions)
+  }, [handleClaudePromptSend, handleSlashCommandSend, resolveEffectiveWorkingDir])
 
   const handleStop = useCallback(async () => {
     if (!claudeSessionId) return
