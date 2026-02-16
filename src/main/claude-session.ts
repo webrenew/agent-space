@@ -5,6 +5,7 @@ import path from 'path'
 import fs from 'fs'
 import os from 'os'
 import { resolveClaudeProfileForDirectory } from './claude-profile'
+import { logMainError, logMainEvent } from './diagnostics'
 
 // ── Types (mirrored from renderer, kept lightweight for main process) ──
 
@@ -31,6 +32,7 @@ interface ActiveSession {
   runtimeTimeout: NodeJS.Timeout | null
   forceKillTimeout: NodeJS.Timeout | null
   timeoutError: string | null
+  stopRequested: boolean
 }
 
 // ── State ──────────────────────────────────────────────────────────────
@@ -63,6 +65,29 @@ function clearSessionTimers(session: ActiveSession): void {
     clearTimeout(session.forceKillTimeout)
     session.forceKillTimeout = null
   }
+}
+
+function scheduleSessionForceKill(session: ActiveSession, reason: string): void {
+  if (session.forceKillTimeout) {
+    clearTimeout(session.forceKillTimeout)
+  }
+  session.forceKillTimeout = setTimeout(() => {
+    const liveSession = activeSessions.get(session.sessionId)
+    if (!liveSession) return
+    try {
+      if (liveSession.process.exitCode !== null || liveSession.process.signalCode !== null) return
+      liveSession.process.kill('SIGKILL')
+      logMainEvent('claude.session.force_kill', {
+        sessionId: liveSession.sessionId,
+        reason,
+      }, 'warn')
+    } catch (err) {
+      logMainError('claude.session.force_kill_failed', err, {
+        sessionId: liveSession.sessionId,
+        reason,
+      })
+    }
+  }, CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS)
 }
 
 // ── Resolve Claude CLI binary ─────────────────────────────────────────
@@ -433,6 +458,7 @@ function startSession(options: ClaudeSessionOptions): string {
     runtimeTimeout: null,
     forceKillTimeout: null,
     timeoutError: null,
+    stopRequested: false,
   }
   activeSessions.set(sessionId, session)
 
@@ -456,17 +482,7 @@ function startSession(options: ClaudeSessionOptions): string {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[claude-session] Failed to SIGTERM timed-out session ${sessionId}: ${message}`)
     }
-
-    liveSession.forceKillTimeout = setTimeout(() => {
-      const active = activeSessions.get(sessionId)
-      if (!active) return
-      try {
-        if (active.process.exitCode !== null || active.process.signalCode !== null) return
-        active.process.kill('SIGKILL')
-      } catch {
-        // Process already dead.
-      }
-    }, CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS)
+    scheduleSessionForceKill(liveSession, 'runtime_timeout')
   }, maxRuntimeMs)
 
   // Parse each JSONL line from stdout
@@ -490,7 +506,10 @@ function startSession(options: ClaudeSessionOptions): string {
   })
 
   proc.on('error', (err: Error) => {
-    console.error(`[claude-session] Process error for ${sessionId}: ${err.message}`)
+    logMainError('claude.session.process_error', err, {
+      sessionId,
+      stopRequested: session.stopRequested,
+    })
     emitEvent({
       sessionId,
       type: 'error',
@@ -503,6 +522,13 @@ function startSession(options: ClaudeSessionOptions): string {
   proc.on('exit', (code: number | null, signal: string | null) => {
     rl.close()
     clearSessionTimers(session)
+    if (session.stopRequested) {
+      logMainEvent('claude.session.stop.completed', {
+        sessionId,
+        code,
+        signal,
+      })
+    }
 
     // If we didn't already send a result event, send one now
     if (code !== 0 && stderrBuffer.trim()) {
@@ -539,32 +565,19 @@ function stopSession(sessionId: string): void {
   const session = activeSessions.get(sessionId)
   if (!session) return
 
+  session.stopRequested = true
+  logMainEvent('claude.session.stop.requested', { sessionId })
+
   clearSessionTimers(session)
-
-  // Force kill after 5s if SIGTERM doesn't work
-  const forceKillTimer = setTimeout(() => {
-    try {
-      session.process.kill('SIGKILL')
-    } catch {
-      // Process already dead — expected
-    }
-  }, CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS)
-
-  // Register exit handler BEFORE sending kill signal to avoid race
-  session.process.once('exit', () => {
-    clearTimeout(forceKillTimer)
-  })
+  scheduleSessionForceKill(session, 'manual_stop')
 
   try {
     session.readline.close()
     session.process.kill('SIGTERM')
+    logMainEvent('claude.session.stop.sigterm_sent', { sessionId })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`[claude-session] Failed to stop session ${sessionId}: ${message}`)
-    clearTimeout(forceKillTimer)
+    logMainError('claude.session.stop.sigterm_failed', err, { sessionId })
   }
-
-  activeSessions.delete(sessionId)
 }
 
 // ── IPC Setup ──────────────────────────────────────────────────────────
