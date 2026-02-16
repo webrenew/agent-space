@@ -1,0 +1,58 @@
+---
+title: World State API
+description: Contract for install-driven scene progression payloads used by the website office scene.
+---
+
+# World State API
+
+Endpoint:
+
+- `GET /api/world-state`
+
+Cache policy:
+
+- `Cache-Control: public, s-maxage=60, stale-while-revalidate=300`
+
+## Response Contract
+
+```json
+{
+  "schemaVersion": "2026-02-16.world-state.v1",
+  "generatedAt": "2026-02-16T00:00:00.000Z",
+  "installCount": 133,
+  "tier": {
+    "level": 2,
+    "key": "tier_2_office_detail",
+    "minInstallCount": 100,
+    "nextInstallCount": 250
+  },
+  "unlocks": {
+    "agentsAndDesks": true,
+    "officeDetail": true,
+    "exteriorPark": false,
+    "blueSky": false,
+    "worldRichness": false
+  },
+  "installSource": {
+    "kind": "prototype",
+    "name": "github_release_assets",
+    "detail": "github_release_assets"
+  },
+  "versions": {
+    "worldState": "2026-02-16.world-state.v1",
+    "tierConfig": "prototype-v1"
+  }
+}
+```
+
+## Install Source Modes
+
+- Prototype mode (default): install count is derived from GitHub release `.dmg` download counts.
+- Production mode: install count is read from backend aggregate values when available.
+
+Environment toggles used by server code:
+
+- `AGENT_OBSERVER_WORLD_INSTALL_SOURCE`: `prototype` or `production`
+- `AGENT_OBSERVER_WORLD_INSTALL_COUNT`: numeric production aggregate count
+
+If production is selected but no valid production count is available, the API falls back to the prototype source contract.
