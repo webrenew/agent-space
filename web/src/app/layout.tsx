@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono } from "next/font/google";
 import {
   SITE_DESCRIPTION,
+  SITE_INSTALLER_URL,
   SITE_NAME,
   SITE_OG_IMAGE,
-  SITE_RELEASES_URL,
   SITE_REPO_URL,
   SITE_TITLE,
   SITE_URL,
@@ -42,7 +42,7 @@ const structuredData = [
     applicationCategory: "DeveloperApplication",
     operatingSystem: "macOS (Apple Silicon)",
     description: SITE_DESCRIPTION,
-    downloadUrl: SITE_RELEASES_URL,
+    downloadUrl: SITE_INSTALLER_URL,
     softwareHelp: `${SITE_REPO_URL}#readme`,
     offers: {
       "@type": "Offer",

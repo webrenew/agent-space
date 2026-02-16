@@ -94,6 +94,16 @@ When changing product behavior:
 - Update relevant docs pages.
 - Keep examples and command snippets in sync.
 
+## Release Installers
+
+- Website installer endpoint: `/download` (serves macOS `.dmg` when available).
+- GitHub Action: `Release Desktop Installer` uploads `.dmg` assets to published releases.
+- Manual backfill for an existing tag:
+
+```bash
+gh workflow run "Release Desktop Installer" -f tag=v1.2.0
+```
+
 ## Questions
 
 See [`SUPPORT.md`](./SUPPORT.md) for where to ask questions and report issues.

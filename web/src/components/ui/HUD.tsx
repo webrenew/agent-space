@@ -1293,7 +1293,7 @@ export function HUD() {
             href={AGENT_SPACE_INSTALLER_URL}
             style={{ color: "#d4a040", fontWeight: 600 }}
           >
-            install
+            macOS install
           </a>
         </div>
       </div>

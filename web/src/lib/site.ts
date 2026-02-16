@@ -21,4 +21,5 @@ export const SITE_DESCRIPTION =
   "Observe, debug, and manage every AI agent across your tools. Real-time dashboards, traces, and alerts in one workspace.";
 export const SITE_REPO_URL = "https://github.com/webrenew/agent-observer";
 export const SITE_RELEASES_URL = `${SITE_REPO_URL}/releases/latest`;
+export const SITE_INSTALLER_URL = `${SITE_URL}/download`;
 export const SITE_OG_IMAGE = "/opengraph.png";

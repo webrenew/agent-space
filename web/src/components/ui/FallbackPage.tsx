@@ -121,7 +121,7 @@ export function FallbackPage() {
               fontWeight: 600,
             }}
           >
-            Download desktop app →
+            Download macOS app (.dmg) →
           </a>
           <a
             href="#download"
@@ -139,6 +139,9 @@ export function FallbackPage() {
           >
             Install steps ↓
           </a>
+          <span style={{ color: "#595653", fontSize: 11 }}>
+            macOS (Apple Silicon) installer.
+          </span>
           <span style={{ color: "#595653", fontSize: 11 }}>
             Tip: enable hardware acceleration or open in a WebGL-capable browser.
           </span>

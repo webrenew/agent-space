@@ -267,7 +267,7 @@ export function ContentSection() {
               lineHeight: 1.2,
             }}
           >
-            Download Agent Observer and install in under a minute.
+            Download Agent Observer for macOS and install in under a minute.
           </h3>
           <p
             style={{
@@ -277,8 +277,9 @@ export function ContentSection() {
               maxWidth: 880,
             }}
           >
-            Download the latest installer directly from this site, open the DMG,
-            and drag Agent Observer into your Applications folder.
+            This installer is for macOS (Apple Silicon) only. Download the
+            latest `.dmg` directly from this site, then drag Agent Observer
+            into your Applications folder.
           </p>
 
           <div className="flex flex-wrap items-center gap-8">
@@ -297,7 +298,7 @@ export function ContentSection() {
                 fontWeight: 700,
               }}
             >
-              Download latest build →
+              Download for macOS (Apple Silicon) →
             </a>
             <a
               href="#install-checklist"
