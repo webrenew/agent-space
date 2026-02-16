@@ -3,6 +3,7 @@ import {
   __testOnlyCollectStaleRunningTodoIndices,
   __testOnlyComputeTodoRunnerAvailableSlots,
   __testOnlyFindNextRunnableTodoIndex,
+  __testOnlyIsTodoJobDispatchEligible,
 } from '../../src/main/todo-runner'
 
 test('slow-spawn reservation consumes slot before process bookkeeping updates', () => {
@@ -26,6 +27,13 @@ test('available slots are clamped and count running plus pending starts', () => 
   expect(__testOnlyComputeTodoRunnerAvailableSlots(3, 1, 1)).toBe(1)
   expect(__testOnlyComputeTodoRunnerAvailableSlots(3, 2, 1)).toBe(0)
   expect(__testOnlyComputeTodoRunnerAvailableSlots(2, 4, 4)).toBe(0)
+})
+
+test('dispatch eligibility excludes both running and pending-start states', () => {
+  expect(__testOnlyIsTodoJobDispatchEligible(false, false)).toBe(true)
+  expect(__testOnlyIsTodoJobDispatchEligible(true, false)).toBe(false)
+  expect(__testOnlyIsTodoJobDispatchEligible(false, true)).toBe(false)
+  expect(__testOnlyIsTodoJobDispatchEligible(true, true)).toBe(false)
 })
 
 test('candidate selection is pure and does not mutate running todos', () => {

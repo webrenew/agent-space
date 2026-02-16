@@ -159,9 +159,19 @@ export function __testOnlyComputeTodoRunnerAvailableSlots(
   return Math.max(0, maxConcurrentJobs - runningJobs - pendingStartJobs)
 }
 
+export function __testOnlyIsTodoJobDispatchEligible(isRunning: boolean, isPendingStart: boolean): boolean {
+  return !(isRunning || isPendingStart)
+}
+
+function isJobDispatchEligible(jobId: string): boolean {
+  return __testOnlyIsTodoJobDispatchEligible(
+    runningProcessByJobId.has(jobId),
+    pendingStartByJobId.has(jobId)
+  )
+}
+
 function reservePendingStart(jobId: string, todoIndex: number, trigger: TodoRunnerRunTrigger): boolean {
-  if (runningProcessByJobId.has(jobId)) return false
-  if (pendingStartByJobId.has(jobId)) return false
+  if (!isJobDispatchEligible(jobId)) return false
   pendingStartByJobId.set(jobId, { todoIndex, trigger })
   return true
 }
@@ -480,7 +490,7 @@ function upsertJob(input: TodoRunnerJobInput): TodoRunnerJobView {
     if (index < 0) throw new Error(`Job not found: ${normalized.id}`)
     const previous = jobsCache[index]
     if (
-      (runningProcessByJobId.has(previous.id) || pendingStartByJobId.has(previous.id))
+      !isJobDispatchEligible(previous.id)
       && hasTodoListChanged(normalized.todoItems, previous.todos)
     ) {
       throw new Error('Cannot edit todo items while job is running. Pause the job and try again.')
@@ -557,7 +567,7 @@ function deleteJob(jobId: string): void {
 function startJob(jobId: string): TodoRunnerJobView {
   const job = findJobById(jobId)
   job.enabled = true
-  if (!runningProcessByJobId.has(jobId) && !pendingStartByJobId.has(jobId)) {
+  if (isJobDispatchEligible(jobId)) {
     manualRunRequestedJobIds.add(jobId)
   }
   job.updatedAt = Date.now()
@@ -1010,8 +1020,7 @@ async function todoRunnerTick(): Promise<void> {
       const index = (startIndex + offset) % jobCount
       const job = jobsCache[index]
       if (!job.enabled) continue
-      if (runningProcessByJobId.has(job.id)) continue
-      if (pendingStartByJobId.has(job.id)) continue
+      if (!isJobDispatchEligible(job.id)) continue
 
       const nextIndex = findNextRunnableTodoIndex(job)
       if (nextIndex === null) {
