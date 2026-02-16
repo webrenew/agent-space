@@ -14,6 +14,12 @@ import Editor, { DiffEditor, type OnMount, type Monaco } from '@monaco-editor/re
 import type { editor } from 'monaco-editor'
 import { useLspBridge } from '../../../hooks/useLspBridge'
 import { useSettingsStore } from '../../../store/settings'
+import {
+  stageImageProposal,
+  unavailableNonTextDiffMessage,
+  type NonTextPreviewKind,
+  type StagedImageProposal,
+} from '../../../lib/non-text-diff'
 
 // ── Language detection ────────────────────────────────────────────────
 
@@ -118,6 +124,13 @@ function previewColor(kind: PreviewKind, lang: string): string {
 function previewLabel(kind: PreviewKind, lang: string): string {
   if (kind === 'text') return lang
   return kind
+}
+
+function nonTextDiffFallbackNotice(kind: PreviewKind, fileName: string): string {
+  if (kind === 'text' || kind === 'markdown') {
+    return 'Diff preview is unavailable for this file type. Compare externally and apply manually.'
+  }
+  return unavailableNonTextDiffMessage(kind as NonTextPreviewKind, fileName)
 }
 
 function formatSize(bytes: number): string {
@@ -378,8 +391,10 @@ export function FileEditorPanel() {
   const [savedContent, setSavedContent] = useState<string>('')
   const [imagePreviewDataUrl, setImagePreviewDataUrl] = useState<string | null>(null)
   const [mediaPreviewDataUrl, setMediaPreviewDataUrl] = useState<string | null>(null)
+  const [stagedImageProposal, setStagedImageProposal] = useState<StagedImageProposal | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [proposalNotice, setProposalNotice] = useState<string | null>(null)
   const [fileSize, setFileSize] = useState(0)
   const [isDirty, setIsDirty] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -399,6 +414,8 @@ export function FileEditorPanel() {
   const lang = filePath ? detectLang(fileName) : 'plaintext'
   const previewKind = filePath ? detectPreviewKind(fileName) : 'text'
   const isTextFile = isTextPreviewKind(previewKind)
+  const hasStagedImageProposal = previewKind === 'image' && stagedImageProposal !== null
+  const hasPendingChanges = isTextFile ? isDirty : hasStagedImageProposal
   const fileTypeLabel = previewLabel(previewKind, lang)
   const fileTypeColor = previewColor(previewKind, lang)
   const canPreviewText = isTextFile
@@ -412,8 +429,25 @@ export function FileEditorPanel() {
     setIsDirty(proposal.content !== savedContentRef.current)
     setViewMode('diff')
     setProposalSource(proposal.source ?? 'agent')
+    setProposalNotice(null)
     notifyChange(proposal.content)
   }, [notifyChange])
+
+  const applyImageProposalToCurrentFile = useCallback((proposal: FileUpdateProposal) => {
+    const staged = stageImageProposal('', proposal.content)
+    if (!staged.next.stagedProposal) {
+      setStagedImageProposal(null)
+      setProposalSource(proposal.source ?? 'agent')
+      setProposalNotice(staged.notice)
+      setViewMode('preview')
+      return
+    }
+
+    setStagedImageProposal(staged.next.stagedProposal)
+    setProposalSource(proposal.source ?? 'agent')
+    setProposalNotice(null)
+    setViewMode('diff')
+  }, [])
 
   // Listen for file open/proposal events
   useEffect(() => {
@@ -423,6 +457,8 @@ export function FileEditorPanel() {
       if (!nextPath) return
       pendingProposalRef.current = null
       setProposalSource(null)
+      setProposalNotice(null)
+      setStagedImageProposal(null)
       setFilePath(nextPath)
     }
 
@@ -435,8 +471,13 @@ export function FileEditorPanel() {
         if (!isLoading && isTextFile) {
           pendingProposalRef.current = null
           applyProposalToCurrentFile(detail)
-        } else if (!isTextFile && !isLoading) {
-          setError('Diff preview is only available for text-like files')
+        } else if (!isLoading && previewKind === 'image') {
+          pendingProposalRef.current = null
+          applyImageProposalToCurrentFile(detail)
+        } else if (!isLoading) {
+          pendingProposalRef.current = null
+          setProposalSource(detail.source ?? 'agent')
+          setProposalNotice(nonTextDiffFallbackNotice(previewKind, fileName))
         }
         return
       }
@@ -451,7 +492,7 @@ export function FileEditorPanel() {
       window.removeEventListener('file:open', openHandler)
       window.removeEventListener('file:propose-update', proposalHandler as EventListener)
     }
-  }, [applyProposalToCurrentFile, filePath, isLoading, isTextFile])
+  }, [applyImageProposalToCurrentFile, applyProposalToCurrentFile, fileName, filePath, isLoading, isTextFile, previewKind])
 
   // Load file content/preview
   useEffect(() => {
@@ -465,6 +506,8 @@ export function FileEditorPanel() {
     setIsTruncated(false)
     setImagePreviewDataUrl(null)
     setMediaPreviewDataUrl(null)
+    setStagedImageProposal(null)
+    setProposalNotice(null)
     setViewMode(defaultViewMode(previewKind))
 
     let cancelled = false
@@ -482,6 +525,12 @@ export function FileEditorPanel() {
           if (cancelled) return
           setImagePreviewDataUrl(result.dataUrl)
           setFileSize(result.size)
+
+          const pending = pendingProposalRef.current
+          if (pending && pending.path === targetPath) {
+            pendingProposalRef.current = null
+            applyImageProposalToCurrentFile(pending)
+          }
         } catch (err) {
           if (cancelled) return
           console.error('[FileEditor] Image preview load failed:', err)
@@ -508,6 +557,13 @@ export function FileEditorPanel() {
           if (cancelled) return
           setMediaPreviewDataUrl(result.dataUrl)
           setFileSize(result.size)
+
+          const pending = pendingProposalRef.current
+          if (pending && pending.path === targetPath) {
+            pendingProposalRef.current = null
+            setProposalSource(pending.source ?? 'agent')
+            setProposalNotice(nonTextDiffFallbackNotice(previewKind, fileName))
+          }
         } catch (err) {
           if (cancelled) return
           console.error('[FileEditor] Media preview load failed:', err)
@@ -533,6 +589,13 @@ export function FileEditorPanel() {
           const stat = await window.electronAPI.fs.stat(targetPath)
           if (cancelled) return
           setFileSize(stat.size)
+
+          const pending = pendingProposalRef.current
+          if (pending && pending.path === targetPath) {
+            pendingProposalRef.current = null
+            setProposalSource(pending.source ?? 'agent')
+            setProposalNotice(nonTextDiffFallbackNotice(previewKind, fileName))
+          }
         } catch (err) {
           if (cancelled) return
           console.error('[FileEditor] Binary metadata load failed:', err)
@@ -583,7 +646,7 @@ export function FileEditorPanel() {
 
     void loadTextFile()
     return () => { cancelled = true }
-  }, [filePath, previewKind, notifyChange])
+  }, [applyImageProposalToCurrentFile, fileName, filePath, notifyChange, previewKind])
 
   // Save handler (staged through diff preview)
   const handleSave = useCallback(async () => {
@@ -616,12 +679,43 @@ export function FileEditorPanel() {
     }
   }, [content, filePath, isSaving, isTextFile, previewKind, viewMode])
 
+  const handleApplyImageProposal = useCallback(async () => {
+    if (!filePath || previewKind !== 'image' || !stagedImageProposal || isSaving) return
+
+    setIsSaving(true)
+    try {
+      const result = await window.electronAPI.fs.writeDataUrl(filePath, stagedImageProposal.dataUrl)
+      setImagePreviewDataUrl(stagedImageProposal.dataUrl)
+      setFileSize(result.size)
+      setStagedImageProposal(null)
+      setProposalSource(null)
+      setProposalNotice(null)
+      setViewMode('preview')
+    } catch (err) {
+      console.error('[FileEditor] Image apply failed:', err)
+      setError(`Failed to apply image update: ${err instanceof Error ? err.message : 'unknown'}`)
+    } finally {
+      setIsSaving(false)
+    }
+  }, [filePath, isSaving, previewKind, stagedImageProposal])
+
   const handleDiscardChanges = useCallback(() => {
-    setContent(savedContentRef.current)
-    setIsDirty(false)
-    setProposalSource(null)
-    setViewMode(previewKind === 'markdown' ? 'preview' : 'edit')
-  }, [previewKind])
+    if (isTextFile) {
+      setContent(savedContentRef.current)
+      setIsDirty(false)
+      setProposalSource(null)
+      setProposalNotice(null)
+      setViewMode(previewKind === 'markdown' ? 'preview' : 'edit')
+      return
+    }
+
+    if (previewKind === 'image') {
+      setStagedImageProposal(null)
+      setProposalSource(null)
+      setProposalNotice(null)
+      setViewMode('preview')
+    }
+  }, [isTextFile, previewKind])
 
   // Listen for Cmd/Ctrl+S
   useEffect(() => {
@@ -768,6 +862,66 @@ export function FileEditorPanel() {
     body = <div style={{ padding: 16, color: '#595653', fontSize: 12 }}>Loading...</div>
   } else if (error) {
     body = <div style={{ padding: 16, color: '#c45050', fontSize: 12 }}>{error}</div>
+  } else if (previewKind === 'image' && viewMode === 'diff' && imagePreviewDataUrl && stagedImageProposal) {
+    body = (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', height: '100%', gap: 10, padding: 10 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+          <span style={{ color: '#595653', fontSize: 10 }}>Current</span>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 10,
+              border: '1px solid rgba(89,86,83,0.2)',
+              borderRadius: 6,
+              backgroundImage: `
+                linear-gradient(45deg, rgba(89,86,83,0.18) 25%, transparent 25%),
+                linear-gradient(-45deg, rgba(89,86,83,0.18) 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, rgba(89,86,83,0.18) 75%),
+                linear-gradient(-45deg, transparent 75%, rgba(89,86,83,0.18) 75%)
+              `,
+              backgroundSize: '18px 18px',
+              backgroundPosition: '0 0, 0 9px, 9px -9px, -9px 0px',
+            }}
+          >
+            <img src={imagePreviewDataUrl} alt={`${fileName} current`} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          </div>
+          <span style={{ color: '#3a3a38', fontSize: 10 }}>{formatSize(fileSize)}</span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+          <span style={{ color: '#6b8fa3', fontSize: 10 }}>Proposed</span>
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 10,
+              border: '1px solid rgba(107,143,163,0.35)',
+              borderRadius: 6,
+              backgroundImage: `
+                linear-gradient(45deg, rgba(89,86,83,0.18) 25%, transparent 25%),
+                linear-gradient(-45deg, rgba(89,86,83,0.18) 25%, transparent 25%),
+                linear-gradient(45deg, transparent 75%, rgba(89,86,83,0.18) 75%),
+                linear-gradient(-45deg, transparent 75%, rgba(89,86,83,0.18) 75%)
+              `,
+              backgroundSize: '18px 18px',
+              backgroundPosition: '0 0, 0 9px, 9px -9px, -9px 0px',
+            }}
+          >
+            <img src={stagedImageProposal.dataUrl} alt={`${fileName} proposed`} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          </div>
+          <span style={{ color: '#3a3a38', fontSize: 10 }}>
+            {formatSize(stagedImageProposal.size)} • {stagedImageProposal.mimeType}
+          </span>
+        </div>
+      </div>
+    )
   } else if (previewKind === 'image' && imagePreviewDataUrl) {
     body = (
       <div
@@ -882,13 +1036,17 @@ export function FileEditorPanel() {
 
   const statusMessage = !filePath
     ? ''
-    : !isTextFile
-      ? `${fileTypeLabel} preview`
-      : viewMode === 'diff'
-        ? 'Diff preview (⌘/Ctrl+S to apply)'
-        : isDirty
-          ? '⌘/Ctrl+S opens diff'
-          : '⌘/Ctrl+S save'
+    : hasStagedImageProposal && viewMode === 'diff'
+      ? 'Image diff preview (apply writes file)'
+      : hasStagedImageProposal
+        ? 'Image proposal staged'
+        : !isTextFile
+          ? (proposalNotice ?? `${fileTypeLabel} preview`)
+          : viewMode === 'diff'
+            ? 'Diff preview (⌘/Ctrl+S to apply)'
+            : isDirty
+              ? '⌘/Ctrl+S opens diff'
+              : '⌘/Ctrl+S save'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0E0E0D', color: '#9A9692' }}>
@@ -904,7 +1062,7 @@ export function FileEditorPanel() {
           fontSize: 12,
         }}>
           <span style={{ color: '#9A9692', fontWeight: 500 }}>
-            {isDirty ? '● ' : ''}{fileName}
+            {hasPendingChanges ? '● ' : ''}{fileName}
           </span>
           <span style={{
             color: fileTypeColor,
@@ -954,6 +1112,26 @@ export function FileEditorPanel() {
               </button>
             </>
           )}
+          {hasStagedImageProposal && (
+            <>
+              <button
+                type="button"
+                style={modeButtonStyle(viewMode === 'preview')}
+                onClick={() => setViewMode('preview')}
+                title="Preview mode"
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                style={modeButtonStyle(viewMode === 'diff')}
+                onClick={() => setViewMode('diff')}
+                title="Diff preview"
+              >
+                Diff
+              </button>
+            </>
+          )}
 
           {diagnosticCounts.errors > 0 && (
             <span style={{ color: '#c45050', fontSize: 10 }}>
@@ -991,6 +1169,45 @@ export function FileEditorPanel() {
               </button>
             </>
           )}
+          {hasStagedImageProposal && (
+            <>
+              <button
+                type="button"
+                style={modeButtonStyle(false)}
+                onClick={handleDiscardChanges}
+                title="Discard staged image update"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                style={modeButtonStyle(false)}
+                onClick={() => {
+                  if (viewMode !== 'diff') {
+                    setViewMode('diff')
+                    return
+                  }
+                  void handleApplyImageProposal()
+                }}
+                title={viewMode === 'diff' ? 'Apply staged image update' : 'Review staged image diff'}
+              >
+                {isSaving ? 'Saving...' : viewMode === 'diff' ? 'Apply' : 'Review'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {proposalNotice && !error && (
+        <div
+          style={{
+            padding: '6px 10px',
+            borderBottom: '1px solid rgba(89,86,83,0.2)',
+            color: '#d4a040',
+            fontSize: 11,
+          }}
+        >
+          {proposalNotice}
         </div>
       )}
 

@@ -97,9 +97,33 @@ async function readFileContent(filePath: string): Promise<{ content: string; tru
   return { content, truncated: false, size: stat.size }
 }
 
-function detectImageMimeType(filePath: string): string {
+function detectMimeType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase()
   return MIME_BY_EXT[ext] ?? 'application/octet-stream'
+}
+
+function decodeDataUrlPayload(dataUrl: string): { mimeType: string; bytes: Buffer } {
+  const match = /^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim())
+  if (!match) {
+    throw new Error('Invalid data URL payload')
+  }
+
+  const mimeType = match[1]
+  const base64Payload = match[2]
+  const bytes = Buffer.from(base64Payload, 'base64')
+  if (bytes.length === 0 && base64Payload.length > 0) {
+    throw new Error('Invalid base64 payload')
+  }
+
+  return { mimeType, bytes }
+}
+
+export function __testOnlyDecodeDataUrlPayload(dataUrl: string): { mimeType: string; size: number } {
+  const decoded = decodeDataUrlPayload(dataUrl)
+  return {
+    mimeType: decoded.mimeType,
+    size: decoded.bytes.length,
+  }
 }
 
 async function readFileAsDataUrl(
@@ -115,10 +139,21 @@ async function readFileAsDataUrl(
     throw new Error(`Preview exceeds ${(maxSize / (1024 * 1024)).toFixed(0)}MB limit`)
   }
   const buffer = await fs.promises.readFile(resolved)
-  const mimeType = detectImageMimeType(resolved)
+  const mimeType = detectMimeType(resolved)
   return {
     dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`,
     size: stat.size,
+    mimeType,
+  }
+}
+
+async function writeDataUrlContent(filePath: string, dataUrl: string): Promise<{ size: number; mimeType: string }> {
+  const resolved = path.resolve(filePath)
+  const { mimeType, bytes } = decodeDataUrlPayload(dataUrl)
+  await fs.promises.writeFile(resolved, bytes)
+  invalidateSearchIndexForPath(resolved)
+  return {
+    size: bytes.length,
     mimeType,
   }
 }
@@ -216,6 +251,10 @@ export function setupFilesystemHandlers(mainWindow?: BrowserWindow): void {
     const resolved = path.resolve(filePath)
     await fs.promises.writeFile(resolved, content, 'utf-8')
     invalidateSearchIndexForPath(resolved)
+  })
+
+  handleFilesystemIpc('fs:writeDataUrl', 'writeDataUrl', async (_event, filePath: string, dataUrl: string) => {
+    return writeDataUrlContent(filePath, dataUrl)
   })
 
   handleFilesystemIpc('fs:stat', 'stat', async (_event, filePath: string) => {

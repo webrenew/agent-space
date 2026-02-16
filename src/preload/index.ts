@@ -99,6 +99,7 @@ const electronAPI: ElectronAPI = {
     homeDir: invokeFor<ElectronAPI['fs']['homeDir']>(IPC_CHANNELS.fs.homeDir),
     stat: invokeFor<ElectronAPI['fs']['stat']>(IPC_CHANNELS.fs.stat),
     writeFile: invokeFor<ElectronAPI['fs']['writeFile']>(IPC_CHANNELS.fs.writeFile),
+    writeDataUrl: invokeFor<ElectronAPI['fs']['writeDataUrl']>(IPC_CHANNELS.fs.writeDataUrl),
     openFolderDialog: invokeFor<ElectronAPI['fs']['openFolderDialog']>(IPC_CHANNELS.fs.openFolderDialog),
     onOpenFolder: subscribeFor<SubscriptionCallback<ElectronAPI['fs']['onOpenFolder']>>(IPC_CHANNELS.fs.openFolder),
     rename: invokeFor<ElectronAPI['fs']['rename']>(IPC_CHANNELS.fs.rename),
