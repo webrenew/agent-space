@@ -28,6 +28,7 @@ import {
 import { parseCsv, todoItemsFromText, todoItemsToText } from './settings/utils'
 import type { SchedulerTaskDraft, TodoRunnerJobDraft } from './settings/types'
 import { useSettingsDraft } from './settings/useSettingsDraft'
+import { useJobAction } from './settings/useJobAction'
 
 type Tab = 'general' | 'appearance' | 'terminal' | 'scopes' | 'schedules' | 'todoRunner' | 'subscription'
 
@@ -294,6 +295,18 @@ export function SettingsPanel() {
     }))
   }, [])
 
+  const runSchedulerAction = useJobAction<SchedulerTaskDraft>({
+    setBusyId: setSchedulerBusyId,
+    setError: setSchedulerError,
+    reload: loadSchedules,
+  })
+
+  const runTodoRunnerAction = useJobAction<TodoRunnerJobDraft>({
+    setBusyId: setTodoRunnerBusyId,
+    setError: setTodoRunnerError,
+    reload: loadTodoRunnerJobs,
+  })
+
   const updateScheduleDraft = useCallback((taskId: string, updates: Partial<SchedulerTaskDraft>) => {
     setScheduleDrafts((prev) => prev.map((task) => (task.id === taskId ? { ...task, ...updates } : task)))
   }, [])
@@ -330,17 +343,10 @@ export function SettingsPanel() {
       return
     }
 
-    try {
-      setSchedulerBusyId(task.id)
+    await runSchedulerAction(task, async () => {
       await window.electronAPI.scheduler.delete(task.id)
-      await loadSchedules()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setSchedulerError(message)
-    } finally {
-      setSchedulerBusyId(null)
-    }
-  }, [loadSchedules])
+    })
+  }, [runSchedulerAction])
 
   const saveSchedule = useCallback(async (task: SchedulerTaskDraft) => {
     const payload: SchedulerTaskInput = {
@@ -353,34 +359,18 @@ export function SettingsPanel() {
       yoloMode: task.yoloMode,
     }
 
-    try {
-      setSchedulerBusyId(task.id)
-      setSchedulerError(null)
+    await runSchedulerAction(task, async () => {
       await window.electronAPI.scheduler.upsert(payload)
-      await loadSchedules()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setSchedulerError(message)
-    } finally {
-      setSchedulerBusyId(null)
-    }
-  }, [loadSchedules])
+    })
+  }, [runSchedulerAction])
 
   const runScheduleNow = useCallback(async (task: SchedulerTaskDraft) => {
     if (task.isDraft) return
 
-    try {
-      setSchedulerBusyId(task.id)
-      setSchedulerError(null)
+    await runSchedulerAction(task, async () => {
       await window.electronAPI.scheduler.runNow(task.id)
-      await loadSchedules()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setSchedulerError(message)
-    } finally {
-      setSchedulerBusyId(null)
-    }
-  }, [loadSchedules])
+    })
+  }, [runSchedulerAction])
 
   const browseScheduleDirectory = useCallback(async (taskId: string) => {
     const selected = await window.electronAPI.settings.selectDirectory()
@@ -431,17 +421,10 @@ export function SettingsPanel() {
       return
     }
 
-    try {
-      setTodoRunnerBusyId(job.id)
+    await runTodoRunnerAction(job, async () => {
       await window.electronAPI.todoRunner.delete(job.id)
-      await loadTodoRunnerJobs()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setTodoRunnerError(message)
-    } finally {
-      setTodoRunnerBusyId(null)
-    }
-  }, [loadTodoRunnerJobs])
+    })
+  }, [runTodoRunnerAction])
 
   const saveTodoRunnerJob = useCallback(async (job: TodoRunnerJobDraft) => {
     const payload: TodoRunnerJobInput = {
@@ -455,66 +438,34 @@ export function SettingsPanel() {
       todoItems: todoItemsFromText(job.todoItemsText),
     }
 
-    try {
-      setTodoRunnerBusyId(job.id)
-      setTodoRunnerError(null)
+    await runTodoRunnerAction(job, async () => {
       await window.electronAPI.todoRunner.upsert(payload)
-      await loadTodoRunnerJobs()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setTodoRunnerError(message)
-    } finally {
-      setTodoRunnerBusyId(null)
-    }
-  }, [loadTodoRunnerJobs])
+    })
+  }, [runTodoRunnerAction])
 
   const startTodoRunnerJob = useCallback(async (job: TodoRunnerJobDraft) => {
     if (job.isDraft) return
 
-    try {
-      setTodoRunnerBusyId(job.id)
-      setTodoRunnerError(null)
+    await runTodoRunnerAction(job, async () => {
       await window.electronAPI.todoRunner.start(job.id)
-      await loadTodoRunnerJobs()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setTodoRunnerError(message)
-    } finally {
-      setTodoRunnerBusyId(null)
-    }
-  }, [loadTodoRunnerJobs])
+    })
+  }, [runTodoRunnerAction])
 
   const pauseTodoRunnerJob = useCallback(async (job: TodoRunnerJobDraft) => {
     if (job.isDraft) return
 
-    try {
-      setTodoRunnerBusyId(job.id)
-      setTodoRunnerError(null)
+    await runTodoRunnerAction(job, async () => {
       await window.electronAPI.todoRunner.pause(job.id)
-      await loadTodoRunnerJobs()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setTodoRunnerError(message)
-    } finally {
-      setTodoRunnerBusyId(null)
-    }
-  }, [loadTodoRunnerJobs])
+    })
+  }, [runTodoRunnerAction])
 
   const resetTodoRunnerJob = useCallback(async (job: TodoRunnerJobDraft) => {
     if (job.isDraft) return
 
-    try {
-      setTodoRunnerBusyId(job.id)
-      setTodoRunnerError(null)
+    await runTodoRunnerAction(job, async () => {
       await window.electronAPI.todoRunner.reset(job.id)
-      await loadTodoRunnerJobs()
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setTodoRunnerError(message)
-    } finally {
-      setTodoRunnerBusyId(null)
-    }
-  }, [loadTodoRunnerJobs])
+    })
+  }, [runTodoRunnerAction])
 
   const browseTodoRunnerDirectory = useCallback(async (jobId: string) => {
     const selected = await window.electronAPI.settings.selectDirectory()

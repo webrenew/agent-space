@@ -1,5 +1,5 @@
 import { Row, Section, Toggle } from './common'
-import { formatDateTime, formatDuration } from './utils'
+import { formatDateTime, formatDuration, runStatusColor } from './utils'
 import type { TodoRunnerJobDraft } from './types'
 
 interface TodoRunnerTabProps {
@@ -73,14 +73,7 @@ export function TodoRunnerTab({
 
       {todoRunnerDrafts.map((job) => {
         const busy = todoRunnerBusyId === job.id
-        const statusColor =
-          job.lastStatus === 'success'
-            ? '#548C5A'
-            : job.lastStatus === 'error'
-              ? '#c45050'
-              : job.lastStatus === 'running'
-                ? '#d4a040'
-                : '#74747C'
+        const statusColor = runStatusColor(job.lastStatus, job.isRunning)
 
         return (
           <div
