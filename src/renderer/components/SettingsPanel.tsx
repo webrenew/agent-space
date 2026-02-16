@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSettingsStore, saveSettings } from '../store/settings'
 import type {
   AppSettings,
@@ -82,6 +82,7 @@ const CLAUDE_PERMISSION_MODE_OPTIONS: ClaudePermissionMode[] = [
   'dontAsk',
   'plan',
 ]
+const SETTINGS_REFRESH_DEBOUNCE_MS = 200
 
 export function SettingsPanel() {
   const isOpen = useSettingsStore((s) => s.isOpen)
@@ -97,27 +98,48 @@ export function SettingsPanel() {
   const [todoRunnerLoading, setTodoRunnerLoading] = useState(false)
   const [todoRunnerError, setTodoRunnerError] = useState<string | null>(null)
   const [todoRunnerBusyId, setTodoRunnerBusyId] = useState<string | null>(null)
+  const schedulerRefreshTimerRef = useRef<number | null>(null)
+  const todoRunnerRefreshTimerRef = useRef<number | null>(null)
+  const schedulerLoadRequestIdRef = useRef(0)
+  const todoRunnerLoadRequestIdRef = useRef(0)
   const pluginCatalog = usePluginCatalog()
 
-  const loadSchedules = useCallback(async () => {
-    setSchedulerLoading(true)
-    setSchedulerError(null)
+  const loadSchedules = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background === true
+    const requestId = schedulerLoadRequestIdRef.current + 1
+    schedulerLoadRequestIdRef.current = requestId
+
+    if (!background) {
+      setSchedulerLoading(true)
+      setSchedulerError(null)
+    }
     try {
       const schedules = await window.electronAPI.scheduler.list()
+      if (requestId !== schedulerLoadRequestIdRef.current) return
       setScheduleDrafts(schedules.map((schedule) => ({ ...schedule, isDraft: false })))
     } catch (err) {
+      if (requestId !== schedulerLoadRequestIdRef.current) return
       const message = err instanceof Error ? err.message : String(err)
       setSchedulerError(message)
     } finally {
-      setSchedulerLoading(false)
+      if (!background && requestId === schedulerLoadRequestIdRef.current) {
+        setSchedulerLoading(false)
+      }
     }
   }, [])
 
-  const loadTodoRunnerJobs = useCallback(async () => {
-    setTodoRunnerLoading(true)
-    setTodoRunnerError(null)
+  const loadTodoRunnerJobs = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background === true
+    const requestId = todoRunnerLoadRequestIdRef.current + 1
+    todoRunnerLoadRequestIdRef.current = requestId
+
+    if (!background) {
+      setTodoRunnerLoading(true)
+      setTodoRunnerError(null)
+    }
     try {
       const jobs = await window.electronAPI.todoRunner.list()
+      if (requestId !== todoRunnerLoadRequestIdRef.current) return
       setTodoRunnerDrafts(
         jobs.map((job) => ({
           ...job,
@@ -126,30 +148,67 @@ export function SettingsPanel() {
         }))
       )
     } catch (err) {
+      if (requestId !== todoRunnerLoadRequestIdRef.current) return
       const message = err instanceof Error ? err.message : String(err)
       setTodoRunnerError(message)
     } finally {
-      setTodoRunnerLoading(false)
+      if (!background && requestId === todoRunnerLoadRequestIdRef.current) {
+        setTodoRunnerLoading(false)
+      }
     }
   }, [])
+
+  const queueSchedulesReload = useCallback(() => {
+    if (schedulerRefreshTimerRef.current != null) {
+      window.clearTimeout(schedulerRefreshTimerRef.current)
+      schedulerRefreshTimerRef.current = null
+    }
+    schedulerRefreshTimerRef.current = window.setTimeout(() => {
+      schedulerRefreshTimerRef.current = null
+      void loadSchedules({ background: true })
+    }, SETTINGS_REFRESH_DEBOUNCE_MS)
+  }, [loadSchedules])
+
+  const queueTodoRunnerReload = useCallback(() => {
+    if (todoRunnerRefreshTimerRef.current != null) {
+      window.clearTimeout(todoRunnerRefreshTimerRef.current)
+      todoRunnerRefreshTimerRef.current = null
+    }
+    todoRunnerRefreshTimerRef.current = window.setTimeout(() => {
+      todoRunnerRefreshTimerRef.current = null
+      void loadTodoRunnerJobs({ background: true })
+    }, SETTINGS_REFRESH_DEBOUNCE_MS)
+  }, [loadTodoRunnerJobs])
 
   useEffect(() => {
     if (!isOpen) return
     void loadSchedules()
     const unsubscribe = window.electronAPI.scheduler.onUpdated(() => {
-      void loadSchedules()
+      queueSchedulesReload()
     })
-    return unsubscribe
-  }, [isOpen, loadSchedules])
+    return () => {
+      unsubscribe()
+      if (schedulerRefreshTimerRef.current != null) {
+        window.clearTimeout(schedulerRefreshTimerRef.current)
+        schedulerRefreshTimerRef.current = null
+      }
+    }
+  }, [isOpen, loadSchedules, queueSchedulesReload])
 
   useEffect(() => {
     if (!isOpen) return
     void loadTodoRunnerJobs()
     const unsubscribe = window.electronAPI.todoRunner.onUpdated(() => {
-      void loadTodoRunnerJobs()
+      queueTodoRunnerReload()
     })
-    return unsubscribe
-  }, [isOpen, loadTodoRunnerJobs])
+    return () => {
+      unsubscribe()
+      if (todoRunnerRefreshTimerRef.current != null) {
+        window.clearTimeout(todoRunnerRefreshTimerRef.current)
+        todoRunnerRefreshTimerRef.current = null
+      }
+    }
+  }, [isOpen, loadTodoRunnerJobs, queueTodoRunnerReload])
 
   // Escape to close
   useEffect(() => {
