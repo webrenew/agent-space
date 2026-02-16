@@ -61,6 +61,7 @@ pnpm lint:web
 pnpm typecheck
 pnpm build
 pnpm -C web build
+pnpm test:coverage
 ```
 
 If your change touches desktop behavior, also run:
@@ -68,6 +69,14 @@ If your change touches desktop behavior, also run:
 ```bash
 pnpm test:smoke
 ```
+
+Ruleset required checks (exact GitHub check names):
+
+- `Desktop Lint, Typecheck, Build`
+- `Frontend Lint, Typecheck, Build`
+- `Smoke Coverage (non-Electron)`
+- `Smoke Scope`
+- `Desktop Smoke (Electron)`
 
 ## Commit and PR Guidelines
 
