@@ -57,6 +57,7 @@ pnpm -C web dev
 - `pnpm build`: Desktop production build
 - `pnpm -C web build`: Web production build
 - `pnpm test:smoke`: Desktop smoke tests (Playwright)
+- `pnpm test:coverage`: Coverage report for non-Electron smoke tests
 
 ## Docs
 

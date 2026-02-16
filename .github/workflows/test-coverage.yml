@@ -1,0 +1,90 @@
+name: Test Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-coverage:
+    name: Smoke Coverage (non-Electron)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.4
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run coverage
+        run: pnpm test:coverage
+
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const summaryPath = 'coverage/coverage-summary.json'
+          if (!fs.existsSync(summaryPath)) {
+            process.exit(0)
+          }
+
+          const summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'))
+          const total = summary.total
+          if (!total) {
+            process.exit(0)
+          }
+
+          const rows = [
+            ['Lines', total.lines?.pct ?? 0, total.lines?.covered ?? 0, total.lines?.total ?? 0],
+            ['Statements', total.statements?.pct ?? 0, total.statements?.covered ?? 0, total.statements?.total ?? 0],
+            ['Functions', total.functions?.pct ?? 0, total.functions?.covered ?? 0, total.functions?.total ?? 0],
+            ['Branches', total.branches?.pct ?? 0, total.branches?.covered ?? 0, total.branches?.total ?? 0],
+          ]
+
+          const toRow = (entry) => `| ${entry[0]} | ${entry[1].toFixed(2)}% | ${entry[2]}/${entry[3]} |`
+          const markdown = [
+            '## Coverage Summary',
+            '',
+            '| Metric | Percent | Covered/Total |',
+            '| --- | ---: | ---: |',
+            ...rows.map(toRow),
+            '',
+          ].join('\n')
+
+          const summaryFile = process.env.GITHUB_STEP_SUMMARY
+          if (summaryFile) {
+            fs.appendFileSync(summaryFile, `${markdown}\n`)
+          } else {
+            console.log(markdown)
+          }
+          NODE
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: smoke-coverage
+          path: coverage
+          if-no-files-found: warn

@@ -14,6 +14,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Explorer-driven file previews now support text/markdown/image/audio/video/PDF
   modes with a binary metadata fallback and staged diff-preview saves for
   text-like edits.
+- Added a dedicated GitHub Actions test-coverage workflow that runs non-Electron
+  smoke tests under `c8` and publishes coverage artifacts/summary.
 
 ### Changed
 
