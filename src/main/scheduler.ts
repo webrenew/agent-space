@@ -1,6 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { spawn, type ChildProcess } from 'child_process'
-import { createInterface } from 'readline'
+import { type ChildProcess } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -8,6 +7,12 @@ import { getClaudeBinaryPath, getClaudeEnvironment } from './claude-session'
 import { logMainError, logMainEvent } from './diagnostics'
 import { resolveClaudeProfileForDirectory } from './claude-profile'
 import { writeFileAtomicSync } from './atomic-write'
+import {
+  clearManagedForceKillTimer,
+  resolveManagedRuntimeMs,
+  runManagedProcess,
+  scheduleManagedForceKill,
+} from './process-runner'
 
 type SchedulerRunStatus = 'idle' | 'running' | 'success' | 'error'
 type SchedulerRunTrigger = 'cron' | 'manual'
@@ -89,39 +94,35 @@ function taskExists(taskId: string): boolean {
 }
 
 function resolveSchedulerRunMaxRuntimeMs(): number {
-  const raw = process.env.AGENT_SPACE_SCHEDULER_MAX_RUNTIME_MS
-  if (!raw) return SCHEDULER_RUN_DEFAULT_MAX_RUNTIME_MS
-  const parsed = Number.parseInt(raw, 10)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    logMainEvent('scheduler.run.invalid_timeout_config', {
-      rawValue: raw,
-      fallbackMs: SCHEDULER_RUN_DEFAULT_MAX_RUNTIME_MS,
-    }, 'warn')
-    return SCHEDULER_RUN_DEFAULT_MAX_RUNTIME_MS
-  }
-  return parsed
+  return resolveManagedRuntimeMs({
+    envVarName: 'AGENT_SPACE_SCHEDULER_MAX_RUNTIME_MS',
+    defaultMs: SCHEDULER_RUN_DEFAULT_MAX_RUNTIME_MS,
+    onInvalidConfig: (rawValue, fallbackMs) => {
+      logMainEvent('scheduler.run.invalid_timeout_config', {
+        rawValue,
+        fallbackMs,
+      }, 'warn')
+    },
+  })
 }
 
 function clearSchedulerForceKillTimer(taskId: string): void {
-  const timer = forceKillTimerByTaskId.get(taskId)
-  if (!timer) return
-  clearTimeout(timer)
-  forceKillTimerByTaskId.delete(taskId)
+  clearManagedForceKillTimer(forceKillTimerByTaskId, taskId)
 }
 
 function scheduleSchedulerForceKill(taskId: string, proc: ChildProcess, reason: string): void {
-  clearSchedulerForceKillTimer(taskId)
-  const timer = setTimeout(() => {
-    forceKillTimerByTaskId.delete(taskId)
-    try {
-      if (proc.exitCode !== null || proc.signalCode !== null) return
-      proc.kill('SIGKILL')
+  scheduleManagedForceKill({
+    timers: forceKillTimerByTaskId,
+    key: taskId,
+    process: proc,
+    delayMs: SCHEDULER_FORCE_KILL_TIMEOUT_MS,
+    onForceKill: () => {
       logMainEvent('scheduler.process.force_kill', { taskId, reason }, 'warn')
-    } catch (err) {
+    },
+    onForceKillFailed: (err) => {
       logMainError('scheduler.process.force_kill_failed', err, { taskId, reason })
-    }
-  }, SCHEDULER_FORCE_KILL_TIMEOUT_MS)
-  forceKillTimerByTaskId.set(taskId, timer)
+    },
+  })
 }
 
 function createRuntime(): SchedulerTaskRuntime {
@@ -567,7 +568,6 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
   runtimeByTaskId.set(task.id, runtime)
   broadcastSchedulerUpdate()
 
-  const startedAt = Date.now()
   const runPrompt = [
     `[Scheduled task run]`,
     `Task: ${task.name}`,
@@ -598,6 +598,8 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
 
   const binaryPath = getClaudeBinaryPath()
   const env = getClaudeEnvironment()
+  const maxRuntimeMs = resolveSchedulerRunMaxRuntimeMs()
+  const timeoutSeconds = Math.max(1, Math.round(maxRuntimeMs / 1000))
 
   logMainEvent('scheduler.run.start', {
     taskId: task.id,
@@ -611,190 +613,131 @@ async function runTask(task: SchedulerTask, trigger: SchedulerRunTrigger): Promi
     profileRulePrefix: profileResolution.matchedRulePathPrefix,
   })
 
-  const proc = spawn(binaryPath, args, {
-    cwd: task.workingDirectory,
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  clearSchedulerForceKillTimer(task.id)
-  runningProcessByTaskId.set(task.id, proc)
-  broadcastSchedulerUpdate()
-
-  const rl = createInterface({ input: proc.stdout! })
-  let stderr = ''
-  let resultError: string | null = null
-  let forceKillTimer: NodeJS.Timeout | null = null
-
-  const clearForceKillTimer = (): void => {
-    if (!forceKillTimer) return
-    clearTimeout(forceKillTimer)
-    forceKillTimer = null
-  }
-
-  const maxRuntimeMs = resolveSchedulerRunMaxRuntimeMs()
-  const runtimeTimer = setTimeout(() => {
-    if (proc.exitCode !== null || proc.signalCode !== null) return
-    const timeoutSeconds = Math.max(1, Math.round(maxRuntimeMs / 1000))
-    resultError = `Scheduled run timed out after ${timeoutSeconds}s`
-    logMainEvent('scheduler.run.timeout', {
-      taskId: task.id,
-      taskName: task.name,
-      trigger,
-      maxRuntimeMs,
-    }, 'warn')
-
-    try {
-      proc.kill('SIGTERM')
-    } catch (err) {
+  const processResult = await runManagedProcess({
+    command: binaryPath,
+    args,
+    spawnOptions: {
+      cwd: task.workingDirectory,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+    maxRuntimeMs,
+    forceKillTimeoutMs: SCHEDULER_FORCE_KILL_TIMEOUT_MS,
+    timeoutErrorMessage: `Scheduled run timed out after ${timeoutSeconds}s`,
+    stderrTailMaxChars: 4_000,
+    onSpawned: (proc) => {
+      clearSchedulerForceKillTimer(task.id)
+      runningProcessByTaskId.set(task.id, proc)
+      broadcastSchedulerUpdate()
+    },
+    onStdoutLine: (line, controls) => {
+      try {
+        const parsed = JSON.parse(line) as Record<string, unknown>
+        if (parsed.type === 'result') {
+          const isError = parsed.is_error === true
+          const errorMessage = typeof parsed.error === 'string' ? parsed.error : null
+          if (isError) {
+            controls.setResultError(errorMessage ?? 'Scheduled run returned an error')
+          }
+        }
+      } catch {
+        // Ignore non-JSON lines.
+      }
+    },
+    onTimeout: () => {
+      logMainEvent('scheduler.run.timeout', {
+        taskId: task.id,
+        taskName: task.name,
+        trigger,
+        maxRuntimeMs,
+      }, 'warn')
+    },
+    onTimeoutSigtermFailed: (err) => {
       logMainError('scheduler.run.timeout_sigterm_failed', err, {
         taskId: task.id,
         taskName: task.name,
         trigger,
       })
-    }
-
-    forceKillTimer = setTimeout(() => {
-      try {
-        if (proc.exitCode !== null || proc.signalCode !== null) return
-        proc.kill('SIGKILL')
-        logMainEvent('scheduler.run.force_kill', {
-          taskId: task.id,
-          taskName: task.name,
-          trigger,
-          reason: 'timeout',
-        }, 'warn')
-      } catch (err) {
-        logMainError('scheduler.run.force_kill_failed', err, {
-          taskId: task.id,
-          taskName: task.name,
-          trigger,
-          reason: 'timeout',
-        })
-      } finally {
-        clearForceKillTimer()
-      }
-    }, SCHEDULER_FORCE_KILL_TIMEOUT_MS)
-  }, maxRuntimeMs)
-
-  rl.on('line', (line) => {
-    const trimmed = line.trim()
-    if (!trimmed) return
-
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>
-      if (parsed.type === 'result') {
-        const isError = parsed.is_error === true
-        const errorMessage = typeof parsed.error === 'string' ? parsed.error : null
-        if (isError) {
-          resultError = errorMessage ?? 'Scheduled run returned an error'
-        }
-      }
-    } catch {
-      // Ignore non-JSON lines.
-    }
-  })
-
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString()
-    if (stderr.length > 4000) {
-      stderr = stderr.slice(-4000)
-    }
-  })
-
-  await new Promise<void>((resolve) => {
-    proc.on('exit', (code) => {
-      clearTimeout(runtimeTimer)
-      clearForceKillTimer()
-      clearSchedulerForceKillTimer(task.id)
-      rl.close()
-      runningProcessByTaskId.delete(task.id)
-
-      const completedAt = Date.now()
-      const duration = completedAt - startedAt
-
-      if (!taskExists(task.id)) {
-        runtimeByTaskId.delete(task.id)
-        logMainEvent('scheduler.run.skip_runtime_write_deleted_task', {
-          taskId: task.id,
-          taskName: task.name,
-          trigger,
-          durationMs: duration,
-          code,
-        })
-        broadcastSchedulerUpdate()
-        resolve()
-        return
-      }
-
-      const finalRuntime = runtimeByTaskId.get(task.id) ?? createRuntime()
-      finalRuntime.lastRunAt = completedAt
-      finalRuntime.lastDurationMs = duration
-
-      if (code === 0 && !resultError) {
-        finalRuntime.lastStatus = 'success'
-        finalRuntime.lastError = null
-        logMainEvent('scheduler.run.success', {
-          taskId: task.id,
-          taskName: task.name,
-          trigger,
-          durationMs: duration,
-        })
-      } else {
-        finalRuntime.lastStatus = 'error'
-        finalRuntime.lastError = resultError ?? (stderr.trim() || `Claude exited with code ${code ?? 'null'}`)
-        logMainEvent('scheduler.run.error', {
-          taskId: task.id,
-          taskName: task.name,
-          trigger,
-          durationMs: duration,
-          code,
-          error: finalRuntime.lastError,
-        }, 'error')
-      }
-
-      runtimeByTaskId.set(task.id, finalRuntime)
-      broadcastSchedulerUpdate()
-      resolve()
-    })
-
-    proc.on('error', (err) => {
-      clearTimeout(runtimeTimer)
-      clearForceKillTimer()
-      clearSchedulerForceKillTimer(task.id)
-      rl.close()
-      runningProcessByTaskId.delete(task.id)
-      const completedAt = Date.now()
-      const duration = completedAt - startedAt
-
-      if (!taskExists(task.id)) {
-        runtimeByTaskId.delete(task.id)
-        logMainEvent('scheduler.run.skip_runtime_write_deleted_task', {
-          taskId: task.id,
-          taskName: task.name,
-          trigger,
-          durationMs: duration,
-          error: err.message,
-        })
-        broadcastSchedulerUpdate()
-        resolve()
-        return
-      }
-
-      const finalRuntime = runtimeByTaskId.get(task.id) ?? createRuntime()
-      finalRuntime.lastRunAt = completedAt
-      finalRuntime.lastDurationMs = duration
-      finalRuntime.lastStatus = 'error'
-      finalRuntime.lastError = err.message
-      runtimeByTaskId.set(task.id, finalRuntime)
-      logMainError('scheduler.run.spawn_error', err, {
+    },
+    onForceKill: () => {
+      logMainEvent('scheduler.run.force_kill', {
         taskId: task.id,
         taskName: task.name,
         trigger,
+        reason: 'timeout',
+      }, 'warn')
+    },
+    onForceKillFailed: (err) => {
+      logMainError('scheduler.run.force_kill_failed', err, {
+        taskId: task.id,
+        taskName: task.name,
+        trigger,
+        reason: 'timeout',
       })
-      broadcastSchedulerUpdate()
-      resolve()
-    })
+    },
   })
+
+  clearSchedulerForceKillTimer(task.id)
+  runningProcessByTaskId.delete(task.id)
+
+  const completedAt = Date.now()
+  const duration = processResult.durationMs
+  if (!taskExists(task.id)) {
+    runtimeByTaskId.delete(task.id)
+    logMainEvent('scheduler.run.skip_runtime_write_deleted_task', {
+      taskId: task.id,
+      taskName: task.name,
+      trigger,
+      durationMs: duration,
+      code: processResult.exitCode,
+      error: processResult.spawnError?.message ?? processResult.resultError ?? null,
+    })
+    broadcastSchedulerUpdate()
+    return
+  }
+
+  const finalRuntime = runtimeByTaskId.get(task.id) ?? createRuntime()
+  finalRuntime.lastRunAt = completedAt
+  finalRuntime.lastDurationMs = duration
+
+  if (processResult.spawnError) {
+    finalRuntime.lastStatus = 'error'
+    finalRuntime.lastError = processResult.spawnError.message
+    runtimeByTaskId.set(task.id, finalRuntime)
+    logMainError('scheduler.run.spawn_error', processResult.spawnError, {
+      taskId: task.id,
+      taskName: task.name,
+      trigger,
+    })
+    broadcastSchedulerUpdate()
+    return
+  }
+
+  if (processResult.exitCode === 0 && !processResult.resultError) {
+    finalRuntime.lastStatus = 'success'
+    finalRuntime.lastError = null
+    logMainEvent('scheduler.run.success', {
+      taskId: task.id,
+      taskName: task.name,
+      trigger,
+      durationMs: duration,
+    })
+  } else {
+    finalRuntime.lastStatus = 'error'
+    finalRuntime.lastError = processResult.resultError
+      ?? (processResult.stderrTail.trim() || `Claude exited with code ${processResult.exitCode ?? 'null'}`)
+    logMainEvent('scheduler.run.error', {
+      taskId: task.id,
+      taskName: task.name,
+      trigger,
+      durationMs: duration,
+      code: processResult.exitCode,
+      error: finalRuntime.lastError,
+    }, 'error')
+  }
+
+  runtimeByTaskId.set(task.id, finalRuntime)
+  broadcastSchedulerUpdate()
 }
 
 async function runTaskById(taskId: string, trigger: SchedulerRunTrigger): Promise<SchedulerTaskWithRuntime> {
