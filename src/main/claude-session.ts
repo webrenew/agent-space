@@ -7,6 +7,7 @@ import os from 'os'
 import { resolveClaudeProfileForDirectory } from './claude-profile'
 import { logMainError, logMainEvent } from './diagnostics'
 import { terminateManagedProcess } from './process-runner'
+import { assertAppNotShuttingDown } from './shutdown-state'
 
 // ── Types (mirrored from renderer, kept lightweight for main process) ──
 
@@ -816,6 +817,7 @@ export function setupClaudeSessionHandlers(_mainWindow: BrowserWindow): void {
   handlersRegistered = true
 
   ipcMain.handle('claude:start', (event, options: unknown) => {
+    assertAppNotShuttingDown('claude:start')
     // Validate input shape
     if (!options || typeof options !== 'object') {
       throw new Error('claude:start requires an options object')

@@ -14,6 +14,7 @@ import {
   scheduleManagedForceKill,
   terminateManagedProcess,
 } from './process-runner'
+import { assertAppNotShuttingDown } from './shutdown-state'
 
 type SchedulerRunStatus = 'idle' | 'running' | 'success' | 'error'
 type SchedulerRunTrigger = 'cron' | 'manual'
@@ -1109,14 +1110,17 @@ export function setupSchedulerHandlers(): void {
   })
 
   ipcMain.handle('scheduler:upsert', async (_event, input: SchedulerTaskInput) => {
+    assertAppNotShuttingDown('scheduler:upsert')
     return upsertTask(input)
   })
 
   ipcMain.handle('scheduler:delete', async (_event, taskId: string) => {
+    assertAppNotShuttingDown('scheduler:delete')
     deleteTask(taskId)
   })
 
   ipcMain.handle('scheduler:runNow', async (_event, taskId: string) => {
+    assertAppNotShuttingDown('scheduler:runNow')
     return await runTaskById(taskId, 'manual')
   })
 

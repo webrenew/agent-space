@@ -25,6 +25,7 @@ import {
   logMainEvent,
   setupDiagnosticsHandlers,
 } from './diagnostics'
+import { markAppShuttingDown } from './shutdown-state'
 
 // Strip Claude session env vars so embedded terminals can launch Claude Code
 for (const key of Object.keys(process.env)) {
@@ -580,6 +581,7 @@ if (!gotTheLock) {
     let forceExitTimer: NodeJS.Timeout | null = null
 
     shutdownInProgress = true
+    markAppShuttingDown()
     recordTelemetryEvent('app.shutdown.config', {
       stepTimeoutMs: shutdownConfig.stepTimeoutMs,
       totalTimeoutMs: shutdownConfig.totalTimeoutMs,

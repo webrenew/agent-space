@@ -12,6 +12,7 @@ import {
   scheduleManagedForceKill,
   terminateManagedProcess,
 } from './process-runner'
+import { assertAppNotShuttingDown } from './shutdown-state'
 
 type TodoRunnerRunStatus = 'idle' | 'running' | 'success' | 'error'
 type TodoRunnerRunTrigger = 'auto' | 'manual'
@@ -1084,22 +1085,27 @@ export function setupTodoRunnerHandlers(): void {
   })
 
   ipcMain.handle('todoRunner:upsert', async (_event, input: TodoRunnerJobInput) => {
+    assertAppNotShuttingDown('todoRunner:upsert')
     return upsertJob(input)
   })
 
   ipcMain.handle('todoRunner:delete', async (_event, jobId: string) => {
+    assertAppNotShuttingDown('todoRunner:delete')
     deleteJob(jobId)
   })
 
   ipcMain.handle('todoRunner:start', async (_event, jobId: string) => {
+    assertAppNotShuttingDown('todoRunner:start')
     return startJob(jobId)
   })
 
   ipcMain.handle('todoRunner:pause', async (_event, jobId: string) => {
+    assertAppNotShuttingDown('todoRunner:pause')
     return pauseJob(jobId)
   })
 
   ipcMain.handle('todoRunner:reset', async (_event, jobId: string) => {
+    assertAppNotShuttingDown('todoRunner:reset')
     return resetJob(jobId)
   })
 }
