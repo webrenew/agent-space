@@ -107,6 +107,7 @@ let nextJobScanIndex = 0
 
 const runtimeByJobId = new Map<string, TodoRunnerRuntime>()
 const runningProcessByJobId = new Map<string, RunningTodoProcess>()
+const pendingStartByJobId = new Map<string, { todoIndex: number; trigger: TodoRunnerRunTrigger }>()
 const stoppedByUserJobIds = new Set<string>()
 const forceKillTimerByJobId = new Map<string, NodeJS.Timeout>()
 const manualRunRequestedJobIds = new Set<string>()
@@ -148,6 +149,25 @@ function resolveTodoRunnerMaxConcurrentJobs(): number {
     return TODO_RUNNER_DEFAULT_MAX_CONCURRENT_JOBS
   }
   return parsed
+}
+
+export function __testOnlyComputeTodoRunnerAvailableSlots(
+  maxConcurrentJobs: number,
+  runningJobs: number,
+  pendingStartJobs: number
+): number {
+  return Math.max(0, maxConcurrentJobs - runningJobs - pendingStartJobs)
+}
+
+function reservePendingStart(jobId: string, todoIndex: number, trigger: TodoRunnerRunTrigger): boolean {
+  if (runningProcessByJobId.has(jobId)) return false
+  if (pendingStartByJobId.has(jobId)) return false
+  pendingStartByJobId.set(jobId, { todoIndex, trigger })
+  return true
+}
+
+function releasePendingStart(jobId: string): void {
+  pendingStartByJobId.delete(jobId)
 }
 
 function limitEnvValue(value: string, maxChars = TODO_RUNNER_ENV_VALUE_MAX_CHARS): {
@@ -460,7 +480,7 @@ function upsertJob(input: TodoRunnerJobInput): TodoRunnerJobView {
     if (index < 0) throw new Error(`Job not found: ${normalized.id}`)
     const previous = jobsCache[index]
     if (
-      runningProcessByJobId.has(previous.id)
+      (runningProcessByJobId.has(previous.id) || pendingStartByJobId.has(previous.id))
       && hasTodoListChanged(normalized.todoItems, previous.todos)
     ) {
       throw new Error('Cannot edit todo items while job is running. Pause the job and try again.')
@@ -537,7 +557,7 @@ function deleteJob(jobId: string): void {
 function startJob(jobId: string): TodoRunnerJobView {
   const job = findJobById(jobId)
   job.enabled = true
-  if (!runningProcessByJobId.has(jobId)) {
+  if (!runningProcessByJobId.has(jobId) && !pendingStartByJobId.has(jobId)) {
     manualRunRequestedJobIds.add(jobId)
   }
   job.updatedAt = Date.now()
@@ -629,15 +649,22 @@ function buildRunnerPayload(job: TodoRunnerJobRecord, todo: TodoItemState, todoI
 }
 
 async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: TodoRunnerRunTrigger): Promise<void> {
-  if (runningProcessByJobId.has(job.id)) return
+  if (runningProcessByJobId.has(job.id)) {
+    releasePendingStart(job.id)
+    return
+  }
   const todo = job.todos[todoIndex]
-  if (!todo) return
+  if (!todo) {
+    releasePendingStart(job.id)
+    return
+  }
   const todoId = todo.id
 
   let cwdStat: fs.Stats
   try {
     cwdStat = fs.statSync(job.workingDirectory)
   } catch {
+    releasePendingStart(job.id)
     const runtime = ensureRuntime(job.id)
     runtime.lastStatus = 'error'
     runtime.lastError = `Directory not found: ${job.workingDirectory}`
@@ -649,6 +676,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
     return
   }
   if (!cwdStat.isDirectory()) {
+    releasePendingStart(job.id)
     const runtime = ensureRuntime(job.id)
     runtime.lastStatus = 'error'
     runtime.lastError = `Not a directory: ${job.workingDirectory}`
@@ -712,6 +740,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
     forceKillTimeoutMs: TODO_RUNNER_FORCE_KILL_TIMEOUT_MS,
     timeoutErrorMessage: `Todo runner timed out after ${timeoutSeconds}s`,
     onSpawned: (process) => {
+      releasePendingStart(job.id)
       runningProcessByJobId.set(job.id, { process, todoIndex })
       broadcastTodoRunnerUpdate()
     },
@@ -759,6 +788,7 @@ async function runTodo(job: TodoRunnerJobRecord, todoIndex: number, trigger: Tod
     },
   })
 
+  releasePendingStart(job.id)
   runningProcessByJobId.delete(job.id)
   clearForceKillTimer(job.id)
   const completedAt = Date.now()
@@ -918,7 +948,11 @@ async function todoRunnerTick(): Promise<void> {
     }
 
     const maxConcurrentJobs = resolveTodoRunnerMaxConcurrentJobs()
-    const availableSlots = Math.max(0, maxConcurrentJobs - runningProcessByJobId.size)
+    const availableSlots = __testOnlyComputeTodoRunnerAvailableSlots(
+      maxConcurrentJobs,
+      runningProcessByJobId.size,
+      pendingStartByJobId.size
+    )
     if (availableSlots <= 0) return
 
     const jobCount = jobsCache.length
@@ -930,6 +964,7 @@ async function todoRunnerTick(): Promise<void> {
       const job = jobsCache[index]
       if (!job.enabled) continue
       if (runningProcessByJobId.has(job.id)) continue
+      if (pendingStartByJobId.has(job.id)) continue
 
       const nextIndex = findNextRunnableTodoIndex(job)
       if (nextIndex === null) {
@@ -947,9 +982,12 @@ async function todoRunnerTick(): Promise<void> {
 
       const trigger: TodoRunnerRunTrigger = manualRunRequestedJobIds.has(job.id) ? 'manual' : 'auto'
       manualRunRequestedJobIds.delete(job.id)
+      if (!reservePendingStart(job.id, nextIndex, trigger)) continue
+
       nextJobScanIndex = (index + 1) % jobCount
-      const runningBefore = runningProcessByJobId.size
+      startedCount += 1
       void runTodo(job, nextIndex, trigger).catch((err) => {
+        releasePendingStart(job.id)
         logMainError('todo_runner.todo.run_failed', err, {
           jobId: job.id,
           jobName: job.name,
@@ -957,9 +995,6 @@ async function todoRunnerTick(): Promise<void> {
           trigger,
         })
       })
-      if (runningProcessByJobId.size > runningBefore) {
-        startedCount += 1
-      }
     }
   } finally {
     tickInFlight = false
@@ -1023,6 +1058,7 @@ export function cleanupTodoRunner(): void {
     stopRunningProcess(jobId, 'cleanup')
   }
   runningProcessByJobId.clear()
+  pendingStartByJobId.clear()
   manualRunRequestedJobIds.clear()
   nextJobScanIndex = 0
 }
