@@ -612,7 +612,8 @@ export function setupFilesystemHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('fs:stat', async (_event, filePath: string) => {
     try {
-      const stat = await fs.promises.stat(filePath)
+      const resolved = path.resolve(filePath)
+      const stat = await fs.promises.stat(resolved)
       return {
         isDirectory: stat.isDirectory(),
         isFile: stat.isFile(),
