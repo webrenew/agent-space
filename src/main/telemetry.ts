@@ -15,6 +15,7 @@ const STARTUP_BREADCRUMB_LIMIT = 200
 
 const pendingStartupBreadcrumbs: TelemetryEntry[] = []
 const recentStartupBreadcrumbs: TelemetryEntry[] = []
+let telemetryWriteQueue: Promise<void> = Promise.resolve()
 
 function telemetryEnabled(): boolean {
   try {
@@ -24,15 +25,20 @@ function telemetryEnabled(): boolean {
   }
 }
 
+function enqueueTelemetryWrite(task: () => Promise<void>): void {
+  telemetryWriteQueue = telemetryWriteQueue
+    .then(task)
+    .catch((err) => {
+      console.error('[telemetry] Failed to append telemetry entry:', err)
+    })
+}
+
 function appendEntry(entry: TelemetryEntry): void {
-  try {
-    if (!fs.existsSync(TELEMETRY_DIR)) {
-      fs.mkdirSync(TELEMETRY_DIR, { recursive: true })
-    }
-    fs.appendFileSync(TELEMETRY_FILE, `${JSON.stringify(entry)}\n`, 'utf-8')
-  } catch (err) {
-    console.error('[telemetry] Failed to append telemetry entry:', err)
-  }
+  const line = `${JSON.stringify(entry)}\n`
+  enqueueTelemetryWrite(async () => {
+    await fs.promises.mkdir(TELEMETRY_DIR, { recursive: true })
+    await fs.promises.appendFile(TELEMETRY_FILE, line, 'utf-8')
+  })
 }
 
 function toErrorPayload(error: unknown): Record<string, unknown> {
