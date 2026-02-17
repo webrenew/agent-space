@@ -33,6 +33,26 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.target_tag.outputs.value }}
+          fetch-depth: 0
+
+      - name: Backfill build assets from main
+        run: |
+          if [ ! -f build/icon.icns ]; then
+            echo "build/icon.icns missing at tag — fetching from main"
+            git checkout origin/main -- build/icon.icns
+          fi
+
+      - name: Derive version from tag
+        id: version
+        env:
+          TAG: ${{ steps.target_tag.outputs.value }}
+        run: |
+          TAG_VERSION="${TAG#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Aligning package.json version $PKG_VERSION → $TAG_VERSION"
+            npm version "$TAG_VERSION" --no-git-tag-version
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
