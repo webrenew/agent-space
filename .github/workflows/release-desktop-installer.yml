@@ -86,7 +86,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build DMG installer
-        run: pnpm package:dmg
+        run: electron-vite build && electron-builder --mac dmg --publish never
 
       - name: Verify installer artifact
         run: |
