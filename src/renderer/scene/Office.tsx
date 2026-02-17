@@ -15,11 +15,11 @@ const COLS = 2
 const X_SPACING = 3.0
 const Z_SPACING = 3.5
 const X_OFFSET = -1.0
-const Z_OFFSET = -2.0
+const Z_OFFSET = -6.0
 const DESK_FACING_Y = Math.PI
-const PARTY_CENTER: [number, number, number] = [4.2, 0, 2.2]
-const PARTY_RADIUS = 1.25
-const SNACK_BAR_POSITION: [number, number, number] = [6.35, 0, 4.55]
+const PARTY_CENTER: [number, number, number] = [0, 0, -6.35]
+const PARTY_RADIUS = 1.75
+const SNACK_BAR_POSITION: [number, number, number] = [10.05, 0, 0.95]
 
 function computeDeskPosition(index: number): [number, number, number] {
   const col = index % COLS
@@ -35,6 +35,106 @@ function computePartySeatPosition(index: number, total: number): [number, number
     0,
     PARTY_CENTER[2] + Math.sin(angle) * PARTY_RADIUS,
   ]
+}
+
+function OfficeSnackBar({
+  position,
+  rotation = [0, 0, 0],
+}: {
+  position: [number, number, number]
+  rotation?: [number, number, number]
+}) {
+  const snackColors = ['#F59E0B', '#EF4444', '#22C55E', '#3B82F6', '#EC4899', '#8B5CF6', '#06B6D4', '#F97316']
+
+  return (
+    <group position={position} rotation={rotation}>
+      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+        <boxGeometry args={[2.8, 1, 0.95]} />
+        <meshStandardMaterial color="#7C5841" />
+      </mesh>
+      <mesh position={[0, 1.02, -0.02]} castShadow>
+        <boxGeometry args={[2.95, 0.08, 1.02]} />
+        <meshStandardMaterial color="#D9C2A0" />
+      </mesh>
+      <mesh position={[0, 1.72, -0.43]} castShadow>
+        <boxGeometry args={[2.95, 1.7, 0.12]} />
+        <meshStandardMaterial color="#F2ECE3" />
+      </mesh>
+      {[1.1, 1.62].map((y) => (
+        <mesh key={`snack-shelf-${y}`} position={[0, y, -0.36]} castShadow>
+          <boxGeometry args={[2.5, 0.05, 0.18]} />
+          <meshStandardMaterial color="#8B6B52" />
+        </mesh>
+      ))}
+      {snackColors.map((color, index) => {
+        const row = Math.floor(index / 4)
+        const col = index % 4
+        return (
+          <mesh
+            key={`snack-jar-${index}`}
+            position={[-0.98 + col * 0.65, 1.2 + row * 0.54, -0.28]}
+          >
+            <cylinderGeometry args={[0.11, 0.11, 0.2, 14]} />
+            <meshStandardMaterial color={color} />
+          </mesh>
+        )
+      })}
+      {[-0.55, -0.05, 0.45].map((x, index) => (
+        <group key={`snack-tap-${index}`} position={[x, 1.2, 0.08]}>
+          <mesh>
+            <boxGeometry args={[0.12, 0.22, 0.12]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
+          <mesh position={[0, -0.12, 0.06]}>
+            <boxGeometry args={[0.04, 0.06, 0.08]} />
+            <meshStandardMaterial color="#94A3B8" />
+          </mesh>
+        </group>
+      ))}
+      <mesh position={[1.18, 0.72, 0.07]} castShadow>
+        <boxGeometry args={[0.48, 1.44, 0.6]} />
+        <meshStandardMaterial color="#D1D5DB" />
+      </mesh>
+      <mesh position={[1.18, 1.2, 0.39]}>
+        <boxGeometry args={[0.42, 0.9, 0.04]} />
+        <meshStandardMaterial color="#F8FAFC" />
+      </mesh>
+      <mesh position={[1.03, 1.2, 0.43]}>
+        <boxGeometry args={[0.02, 0.24, 0.02]} />
+        <meshStandardMaterial color="#64748B" />
+      </mesh>
+      {[-0.82, 0, 0.82].map((x) => (
+        <group key={`snack-stool-${x}`} position={[x, 0, 1]}>
+          <mesh position={[0, 0.6, 0]} castShadow>
+            <cylinderGeometry args={[0.22, 0.22, 0.08, 16]} />
+            <meshStandardMaterial color="#2F3E4F" />
+          </mesh>
+          <mesh position={[0, 0.3, 0]} castShadow>
+            <cylinderGeometry args={[0.04, 0.05, 0.6, 10]} />
+            <meshStandardMaterial color="#4B5563" />
+          </mesh>
+        </group>
+      ))}
+      <mesh position={[-1.14, 1.12, 0.16]}>
+        <cylinderGeometry args={[0.18, 0.12, 0.1, 14]} />
+        <meshStandardMaterial color="#A16207" />
+      </mesh>
+      {[[-1.2, 1.19, 0.13], [-1.1, 1.2, 0.2], [-1.08, 1.2, 0.11]].map((pos, index) => (
+        <mesh key={`snack-fruit-${index}`} position={pos as [number, number, number]}>
+          <sphereGeometry args={[0.05, 10, 8]} />
+          <meshStandardMaterial color={index === 0 ? '#EF4444' : index === 1 ? '#F97316' : '#FACC15'} />
+        </mesh>
+      ))}
+      <mesh position={[0.1, 2.2, -0.36]}>
+        <boxGeometry args={[1.4, 0.32, 0.04]} />
+        <meshStandardMaterial
+          color="#FDE68A"
+          emissive="#FBBF24"
+          emissiveIntensity={0.45}
+        />
+      </mesh>
+    </group>
+  )
 }
 
 export function Office() {
@@ -220,127 +320,15 @@ export function Office() {
         </mesh>
       </group>
 
-      {/* Snack bar station */}
-      <group position={SNACK_BAR_POSITION}>
-        {/* Counter + backsplash */}
-        <mesh position={[0, 0.45, 0]} castShadow receiveShadow>
-          <boxGeometry args={[0.64, 0.9, 2.2]} />
-          <meshStandardMaterial color="#7d6245" roughness={0.72} />
-        </mesh>
-        <mesh position={[-0.05, 0.93, 0]} castShadow receiveShadow>
-          <boxGeometry args={[0.76, 0.06, 2.24]} />
-          <meshStandardMaterial color="#d8c1a2" roughness={0.42} />
-        </mesh>
-        <mesh position={[0.29, 1.23, 0]} receiveShadow>
-          <boxGeometry args={[0.06, 0.54, 2.04]} />
-          <meshStandardMaterial color="#efe4d4" roughness={0.65} />
-        </mesh>
-
-        {/* Drink dispenser */}
-        <group position={[-0.16, 0.96, -0.7]}>
-          <mesh position={[0, 0.18, 0]} castShadow>
-            <boxGeometry args={[0.24, 0.34, 0.22]} />
-            <meshStandardMaterial color="#d1d5db" roughness={0.42} metalness={0.15} />
-          </mesh>
-          <mesh position={[0, 0.41, 0]} castShadow>
-            <cylinderGeometry args={[0.1, 0.1, 0.18, 14]} />
-            <meshStandardMaterial color="#60a5fa" transparent opacity={0.72} />
-          </mesh>
-          <mesh position={[-0.13, 0.16, -0.05]} castShadow>
-            <boxGeometry args={[0.08, 0.02, 0.03]} />
-            <meshStandardMaterial color="#334155" />
-          </mesh>
-          <mesh position={[-0.13, 0.16, 0.05]} castShadow>
-            <boxGeometry args={[0.08, 0.02, 0.03]} />
-            <meshStandardMaterial color="#334155" />
-          </mesh>
-          <mesh position={[-0.16, 0.07, 0]} receiveShadow>
-            <boxGeometry args={[0.1, 0.02, 0.12]} />
-            <meshStandardMaterial color="#6b7280" />
-          </mesh>
-        </group>
-
-        {/* Fruit bowl */}
-        <group position={[-0.18, 0.97, 0.04]}>
-          <mesh castShadow>
-            <cylinderGeometry args={[0.13, 0.09, 0.05, 20]} />
-            <meshStandardMaterial color="#a16207" roughness={0.65} />
-          </mesh>
-          {[
-            [-0.05, 0.06, -0.02, '#ef4444'],
-            [0.03, 0.06, 0.01, '#22c55e'],
-            [0, 0.06, -0.06, '#f59e0b'],
-            [0.06, 0.06, -0.05, '#f97316'],
-          ].map(([x, y, z, color], index) => (
-            <mesh key={`fruit-${index}`} position={[x as number, y as number, z as number]} castShadow>
-              <sphereGeometry args={[0.045, 10, 10]} />
-              <meshStandardMaterial color={color as string} roughness={0.5} />
-            </mesh>
-          ))}
-        </group>
-
-        {/* Mug row */}
-        {[-0.72, -0.54, -0.36].map((z, index) => (
-          <group key={`snack-mug-${index}`} position={[-0.19, 0.98, z]}>
-            <mesh castShadow>
-              <cylinderGeometry args={[0.042, 0.038, 0.08, 12]} />
-              <meshStandardMaterial color={index === 1 ? '#b91c1c' : '#cbd5e1'} />
-            </mesh>
-            <mesh position={[-0.045, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
-              <torusGeometry args={[0.018, 0.006, 8, 12, Math.PI]} />
-              <meshStandardMaterial color="#9ca3af" />
-            </mesh>
-          </group>
-        ))}
-
-        {/* Plate stack */}
-        <group position={[-0.17, 0.965, 0.38]}>
-          {Array.from({ length: 4 }, (_, index) => (
-            <mesh key={`plate-${index}`} position={[0, index * 0.01, 0]} receiveShadow>
-              <cylinderGeometry args={[0.1, 0.1, 0.008, 20]} />
-              <meshStandardMaterial color="#f8fafc" roughness={0.58} />
-            </mesh>
-          ))}
-        </group>
-
-        {/* Chips bowl + bag */}
-        <group position={[-0.2, 0.97, -0.32]}>
-          <mesh castShadow>
-            <cylinderGeometry args={[0.11, 0.08, 0.05, 18]} />
-            <meshStandardMaterial color="#78350f" roughness={0.68} />
-          </mesh>
-          {Array.from({ length: 8 }, (_, index) => {
-            const angle = (index / 8) * Math.PI * 2
-            return (
-              <mesh
-                key={`chip-${index}`}
-                position={[Math.cos(angle) * 0.05, 0.05, Math.sin(angle) * 0.05]}
-                rotation={[0, angle, 0]}
-              >
-                <boxGeometry args={[0.03, 0.005, 0.016]} />
-                <meshStandardMaterial color="#facc15" />
-              </mesh>
-            )
-          })}
-        </group>
-        <group position={[-0.1, 1.03, -0.1]} rotation={[0, -0.24, 0]}>
-          <mesh castShadow>
-            <boxGeometry args={[0.11, 0.2, 0.06]} />
-            <meshStandardMaterial color="#f59e0b" roughness={0.35} />
-          </mesh>
-          <mesh position={[-0.056, 0, 0.018]}>
-            <boxGeometry args={[0.002, 0.16, 0.022]} />
-            <meshStandardMaterial color="#dc2626" />
-          </mesh>
-        </group>
-      </group>
+      {/* Office snack bar */}
+      <OfficeSnackBar position={SNACK_BAR_POSITION} rotation={[0, -Math.PI / 2, 0]} />
 
       {/* Whiteboard on back wall */}
-      <mesh position={[3, 2.8, -6.85]}>
+      <mesh position={[2, 1.5, -13.85]}>
         <boxGeometry args={[2.5, 1.5, 0.05]} />
         <meshStandardMaterial color="#f8fafc" />
       </mesh>
-      <mesh position={[3, 2.8, -6.82]}>
+      <mesh position={[2, 1.5, -13.82]}>
         <boxGeometry args={[2.3, 1.3, 0.02]} />
         <meshStandardMaterial color="#fff" />
       </mesh>
@@ -356,11 +344,13 @@ export function Office() {
       <OrbitControls
         makeDefault
         enableDamping
-        dampingFactor={0.1}
-        minDistance={3}
-        maxDistance={20}
-        maxPolarAngle={Math.PI / 2.1}
-        target={[0, 1, 0]}
+        dampingFactor={0.05}
+        target={[0, 1, -6]}
+        minPolarAngle={Math.PI / 6}
+        maxPolarAngle={Math.PI / 2.5}
+        minDistance={8}
+        maxDistance={18}
+        enablePan={false}
       />
     </>
   )

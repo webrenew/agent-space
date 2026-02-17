@@ -1,8 +1,9 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef } from "react";
-import type { InstancedMesh } from "three";
-import { Object3D } from "three";
+import { useFrame } from "@react-three/fiber";
+import type { AmbientLight, DirectionalLight, InstancedMesh, MeshStandardMaterial, PointLight } from "three";
+import { Color, MathUtils, Object3D } from "three";
 import { useDemoStore } from "@/stores/useDemoStore";
 import { AgentCharacter } from "./AgentCharacter";
 import { CelebrationEffect } from "./CelebrationEffect";
@@ -18,6 +19,21 @@ const WALL_COLOR = "#E8E0D8";
 const FLOOR_COLOR = "#D4A574";
 const DESK_COLOR = "#8B6914";
 const MONITOR_COLOR = "#1A1A2E";
+const BACK_WINDOW_POSITIONS = [-7.2, -2.4, 2.4, 7.2] as const;
+const SIDE_WINDOW_POSITIONS = [-10.2, -5.4] as const;
+const BACK_WINDOW_SIZE = { width: 2, height: 1.4 } as const;
+const SIDE_WINDOW_SIZE = { width: 1.8, height: 1.25 } as const;
+const WINDOW_OPENING_PADDING = 0.2;
+const DAY_DURATION_SECONDS = 6 * 60 * 60;
+const CELESTIAL_ORBIT_RADIUS_X = 24;
+const CELESTIAL_ORBIT_RADIUS_Y = 13;
+const CELESTIAL_ORBIT_CENTER_Y = 5;
+const CELESTIAL_ORBIT_CENTER_Z = -18;
+const DAY_SKY_COLOR = new Color("#87CEEB");
+const NIGHT_SKY_COLOR = new Color("#0B1226");
+const DAY_SKY_EMISSIVE = new Color("#BFDBFE");
+const NIGHT_SKY_EMISSIVE = new Color("#1E3A8A");
+const showOutdoorEnvironment = true;
 
 const SCREEN_COLORS: Record<AgentStatus, { color: string; emissive: string; intensity: number }> = {
   idle: { color: "#1a1a2e", emissive: "#334155", intensity: 0.1 },
@@ -45,6 +61,16 @@ interface ExteriorPropLayout {
   position: [number, number, number];
   rotation?: [number, number, number];
   scale?: number;
+}
+
+interface WallOpeningSegment {
+  center: number;
+  length: number;
+}
+
+interface WallOpening {
+  center: number;
+  width: number;
 }
 
 const OFFICE_PLANT_LAYOUT: PlantLayout[] = [
@@ -84,6 +110,39 @@ const EXTERIOR_PROP_LAYOUT: ExteriorPropLayout[] = [
   { type: "lamp", position: [0, 0, 8.9], scale: 0.92 },
 ];
 
+function computeWallSegments(
+  span: number,
+  openings: WallOpening[]
+): WallOpeningSegment[] {
+  const min = -span / 2;
+  const max = span / 2;
+  const sortedOpenings = [...openings].sort((a, b) => a.center - b.center);
+  const segments: WallOpeningSegment[] = [];
+
+  let cursor = min;
+
+  for (const opening of sortedOpenings) {
+    const openingMin = Math.max(min, opening.center - opening.width / 2);
+    const openingMax = Math.min(max, opening.center + opening.width / 2);
+    if (openingMin > cursor + 0.001) {
+      segments.push({
+        center: (cursor + openingMin) / 2,
+        length: openingMin - cursor,
+      });
+    }
+    cursor = Math.max(cursor, openingMax);
+  }
+
+  if (cursor < max - 0.001) {
+    segments.push({
+      center: (cursor + max) / 2,
+      length: max - cursor,
+    });
+  }
+
+  return segments;
+}
+
 function computePizzaSeat(index: number, total: number): [number, number, number] {
   const count = Math.max(3, total);
   const angle = (index / count) * Math.PI * 2 - Math.PI / 2;
@@ -92,6 +151,30 @@ function computePizzaSeat(index: number, total: number): [number, number, number
     0,
     PIZZA_CENTER[2] + Math.sin(angle) * PIZZA_RADIUS,
   ];
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function resolveCelestialState(elapsedSeconds: number) {
+  const phase = (elapsedSeconds % DAY_DURATION_SECONDS) / DAY_DURATION_SECONDS;
+  const sunAngle = phase * Math.PI * 2 - Math.PI / 2;
+  const moonAngle = sunAngle + Math.PI;
+  const sunPosition: [number, number, number] = [
+    Math.cos(sunAngle) * CELESTIAL_ORBIT_RADIUS_X,
+    Math.sin(sunAngle) * CELESTIAL_ORBIT_RADIUS_Y + CELESTIAL_ORBIT_CENTER_Y,
+    CELESTIAL_ORBIT_CENTER_Z + Math.sin(sunAngle) * 1.4,
+  ];
+  const moonPosition: [number, number, number] = [
+    Math.cos(moonAngle) * CELESTIAL_ORBIT_RADIUS_X,
+    Math.sin(moonAngle) * CELESTIAL_ORBIT_RADIUS_Y + CELESTIAL_ORBIT_CENTER_Y,
+    CELESTIAL_ORBIT_CENTER_Z + Math.sin(moonAngle) * 1.4,
+  ];
+  const daylight = clamp01((sunPosition[1] + 1.2) / (CELESTIAL_ORBIT_RADIUS_Y + 1.2));
+  const moonlight = clamp01((moonPosition[1] + 1.2) / (CELESTIAL_ORBIT_RADIUS_Y + 1.2));
+
+  return { phase, daylight, moonlight, sunPosition, moonPosition };
 }
 
 function Desk({
@@ -403,6 +486,84 @@ function WallWindow({
   );
 }
 
+function WallWithWindowOpenings({
+  position,
+  span,
+  spanAxis = "x",
+  openings,
+  openingCenterY,
+  openingHeight,
+  wallHeight = 4,
+  wallThickness = 0.2,
+}: {
+  position: [number, number, number];
+  span: number;
+  spanAxis?: "x" | "z";
+  openings: WallOpening[];
+  openingCenterY: number;
+  openingHeight: number;
+  wallHeight?: number;
+  wallThickness?: number;
+}) {
+  const minY = -wallHeight / 2;
+  const maxY = wallHeight / 2;
+  const openingBottom = Math.max(minY, openingCenterY - openingHeight / 2);
+  const openingTop = Math.min(maxY, openingCenterY + openingHeight / 2);
+  const lowerBandHeight = Math.max(0, openingBottom - minY);
+  const upperBandHeight = Math.max(0, maxY - openingTop);
+  const middleBandHeight = Math.max(0, openingTop - openingBottom);
+  const middleSegments = middleBandHeight > 0 ? computeWallSegments(span, openings) : [];
+
+  return (
+    <group position={position}>
+      {lowerBandHeight > 0 && (
+        <mesh position={[0, minY + lowerBandHeight / 2, 0]} receiveShadow>
+          <boxGeometry
+            args={
+              spanAxis === "x"
+                ? [span, lowerBandHeight, wallThickness]
+                : [wallThickness, lowerBandHeight, span]
+            }
+          />
+          <meshStandardMaterial color={WALL_COLOR} />
+        </mesh>
+      )}
+      {upperBandHeight > 0 && (
+        <mesh position={[0, openingTop + upperBandHeight / 2, 0]} receiveShadow>
+          <boxGeometry
+            args={
+              spanAxis === "x"
+                ? [span, upperBandHeight, wallThickness]
+                : [wallThickness, upperBandHeight, span]
+            }
+          />
+          <meshStandardMaterial color={WALL_COLOR} />
+        </mesh>
+      )}
+      {middleSegments.map((segment, index) => (
+        <mesh
+          key={`wall-column-${spanAxis}-${index}`}
+          position={
+            spanAxis === "x"
+              ? [segment.center, openingBottom + middleBandHeight / 2, 0]
+              : [0, openingBottom + middleBandHeight / 2, segment.center]
+          }
+          receiveShadow
+        >
+          <boxGeometry
+            args={
+              spanAxis === "x"
+                ? [segment.length, middleBandHeight, wallThickness]
+                : [wallThickness, middleBandHeight, segment.length]
+            }
+          />
+          <meshStandardMaterial color={WALL_COLOR} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
 function Whiteboard({
   position,
 }: {
@@ -426,134 +587,19 @@ function Whiteboard({
   );
 }
 
-function OfficeSnackBar({
-  position,
-  rotation = [0, 0, 0],
+function SkyDome({
+  materialRef,
 }: {
-  position: [number, number, number];
-  rotation?: [number, number, number];
+  materialRef: { current: MeshStandardMaterial | null };
 }) {
-  const snackColors = ["#F59E0B", "#EF4444", "#22C55E", "#3B82F6", "#EC4899", "#8B5CF6", "#06B6D4", "#F97316"];
-
-  return (
-    <group position={position} rotation={rotation}>
-      {/* Counter + backsplash */}
-      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
-        <boxGeometry args={[2.8, 1, 0.95]} />
-        <meshStandardMaterial color="#7C5841" />
-      </mesh>
-      <mesh position={[0, 1.02, -0.02]} castShadow>
-        <boxGeometry args={[2.95, 0.08, 1.02]} />
-        <meshStandardMaterial color="#D9C2A0" />
-      </mesh>
-      <mesh position={[0, 1.72, -0.43]} castShadow>
-        <boxGeometry args={[2.95, 1.7, 0.12]} />
-        <meshStandardMaterial color="#F2ECE3" />
-      </mesh>
-
-      {/* Shelves + chips */}
-      {[1.1, 1.62].map((y) => (
-        <mesh key={`snack-shelf-${y}`} position={[0, y, -0.36]} castShadow>
-          <boxGeometry args={[2.5, 0.05, 0.18]} />
-          <meshStandardMaterial color="#8B6B52" />
-        </mesh>
-      ))}
-      {snackColors.map((color, index) => {
-        const row = Math.floor(index / 4);
-        const col = index % 4;
-        return (
-          <mesh
-            key={`chip-bag-${index}`}
-            position={[-0.98 + col * 0.65, 1.2 + row * 0.54, -0.28]}
-            rotation={[0.02 * (index % 2 ? -1 : 1), 0, 0]}
-          >
-            <boxGeometry args={[0.2, 0.22, 0.07]} />
-            <meshStandardMaterial color={color} />
-          </mesh>
-        );
-      })}
-
-      {/* Drink dispenser with taps */}
-      <mesh position={[1.18, 0.72, 0.07]} castShadow>
-        <boxGeometry args={[0.48, 1.44, 0.6]} />
-        <meshStandardMaterial color="#D1D5DB" />
-      </mesh>
-      <mesh position={[1.18, 1.2, 0.39]}>
-        <boxGeometry args={[0.42, 0.9, 0.04]} />
-        <meshStandardMaterial color="#F8FAFC" />
-      </mesh>
-      {[-0.58, -0.18, 0.22].map((x, index) => (
-        <group key={`snack-tap-${index}`} position={[x, 1.2, 0.08]}>
-          <mesh>
-            <boxGeometry args={[0.12, 0.22, 0.12]} />
-            <meshStandardMaterial color="#334155" />
-          </mesh>
-          <mesh position={[0, -0.12, 0.06]}>
-            <boxGeometry args={[0.04, 0.06, 0.08]} />
-            <meshStandardMaterial color="#94A3B8" />
-          </mesh>
-          <mesh position={[0, -0.2, 0.13]}>
-            <cylinderGeometry args={[0.04, 0.035, 0.1, 12]} />
-            <meshStandardMaterial color="#F8FAFC" />
-          </mesh>
-        </group>
-      ))}
-
-      {/* Mugs on counter */}
-      {[-0.95, -0.68, -0.41].map((x, index) => (
-        <group key={`mug-${index}`} position={[x, 1.09, 0.23]}>
-          <mesh>
-            <cylinderGeometry args={[0.07, 0.065, 0.1, 12]} />
-            <meshStandardMaterial color={index === 1 ? "#38BDF8" : "#F8FAFC"} />
-          </mesh>
-          <mesh position={[0.08, 0, 0]}>
-            <torusGeometry args={[0.03, 0.008, 8, 16]} />
-            <meshStandardMaterial color="#E2E8F0" />
-          </mesh>
-        </group>
-      ))}
-
-      {/* Plates stack */}
-      {[0, 1, 2].map((index) => (
-        <mesh key={`plate-${index}`} position={[-0.15, 1.08 + index * 0.018, 0.2]}>
-          <cylinderGeometry args={[0.14, 0.14, 0.014, 20]} />
-          <meshStandardMaterial color={index % 2 === 0 ? "#F8FAFC" : "#E2E8F0"} />
-        </mesh>
-      ))}
-
-      {/* Fruit bowl */}
-      <mesh position={[-1.14, 1.12, 0.16]}>
-        <cylinderGeometry args={[0.18, 0.12, 0.1, 14]} />
-        <meshStandardMaterial color="#A16207" />
-      </mesh>
-      {[[-1.2, 1.19, 0.13], [-1.1, 1.2, 0.2], [-1.08, 1.2, 0.11]].map((fruit, index) => (
-        <mesh key={`snack-fruit-${index}`} position={fruit as [number, number, number]}>
-          <sphereGeometry args={[0.05, 10, 8]} />
-          <meshStandardMaterial color={index === 0 ? "#EF4444" : index === 1 ? "#F97316" : "#FACC15"} />
-        </mesh>
-      ))}
-
-      {/* Snack bar sign */}
-      <mesh position={[0.1, 2.2, -0.36]}>
-        <boxGeometry args={[1.4, 0.32, 0.04]} />
-        <meshStandardMaterial
-          color="#FDE68A"
-          emissive="#FBBF24"
-          emissiveIntensity={0.45}
-        />
-      </mesh>
-    </group>
-  );
-}
-
-function SkyDome({ richEnvironment }: { richEnvironment: boolean }) {
   return (
     <mesh>
       <sphereGeometry args={[85, 48, 24]} />
       <meshStandardMaterial
-        color={richEnvironment ? "#87CEEB" : "#9ED3FF"}
-        emissive={richEnvironment ? "#BFDBFE" : "#DBEAFE"}
-        emissiveIntensity={richEnvironment ? 0.2 : 0.12}
+        ref={materialRef}
+        color="#87CEEB"
+        emissive="#BFDBFE"
+        emissiveIntensity={0.2}
         side={1}
       />
     </mesh>
@@ -667,10 +713,190 @@ function ExteriorFlowerBed({
   );
 }
 
+function YardBorderShrubs() {
+  const shrubPositions: [number, number, number][] = [
+    [-10.4, 0, -15.9],
+    [-6.8, 0, -16.1],
+    [-3.1, 0, -16.2],
+    [2.7, 0, -16.2],
+    [6.2, 0, -16.05],
+    [10.2, 0, -15.9],
+    [-10.45, 0, 5.95],
+    [10.45, 0, 5.95],
+  ];
+
+  return (
+    <group>
+      {shrubPositions.map((position, index) => (
+        <mesh key={`yard-shrub-${index}`} position={position} castShadow>
+          <sphereGeometry args={[0.38 + (index % 3) * 0.05, 14, 10]} />
+          <meshStandardMaterial color={index % 2 === 0 ? "#2F855A" : "#3FA16E"} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function ExteriorCampusBackdrop({
+  showBlueSky,
+  richEnvironment,
+}: {
+  showBlueSky: boolean;
+  richEnvironment: boolean;
+}) {
+  const skyColor = showBlueSky
+    ? richEnvironment
+      ? "#B8E0FF"
+      : "#CDE8FF"
+    : "#CBD5E1";
+  const skylineColor = richEnvironment ? "#7C8FA4" : "#94A3B8";
+
+  return (
+    <group>
+      <mesh position={[0, 3.2, -20]}>
+        <planeGeometry args={[38, 8]} />
+        <meshStandardMaterial color={skyColor} emissive={skyColor} emissiveIntensity={0.18} />
+      </mesh>
+      <mesh position={[0, 0.9, -18.8]} receiveShadow>
+        <boxGeometry args={[24, 1.8, 0.9]} />
+        <meshStandardMaterial color={showBlueSky ? "#A0AEC0" : "#9CA3AF"} />
+      </mesh>
+      {[-8.6, -5.2, -2.1, 1.4, 4.7, 8.1].map((x, index) => (
+        <mesh
+          key={`backdrop-building-${index}`}
+          position={[x, 1.7 + (index % 3) * 0.32, -18.15 - (index % 2) * 0.22]}
+          receiveShadow
+        >
+          <boxGeometry args={[1.75, 2.1 + (index % 3) * 0.58, 0.62]} />
+          <meshStandardMaterial color={index % 2 === 0 ? skylineColor : "#64748B"} />
+        </mesh>
+      ))}
+      <mesh position={[-18.7, 2.1, -5]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[24, 6]} />
+        <meshStandardMaterial color={skyColor} emissive={skyColor} emissiveIntensity={0.09} />
+      </mesh>
+      <mesh position={[18.7, 2.1, -5]} rotation={[0, -Math.PI / 2, 0]}>
+        <planeGeometry args={[24, 6]} />
+        <meshStandardMaterial color={skyColor} emissive={skyColor} emissiveIntensity={0.09} />
+      </mesh>
+    </group>
+  );
+}
+
+function OfficeSnackBar({
+  position,
+  rotation = [0, 0, 0],
+}: {
+  position: [number, number, number];
+  rotation?: [number, number, number];
+}) {
+  const snackColors = ["#F59E0B", "#EF4444", "#22C55E", "#3B82F6", "#EC4899", "#8B5CF6", "#06B6D4", "#F97316"];
+
+  return (
+    <group position={position} rotation={rotation}>
+      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+        <boxGeometry args={[2.8, 1, 0.95]} />
+        <meshStandardMaterial color="#7C5841" />
+      </mesh>
+      <mesh position={[0, 1.02, -0.02]} castShadow>
+        <boxGeometry args={[2.95, 0.08, 1.02]} />
+        <meshStandardMaterial color="#D9C2A0" />
+      </mesh>
+      <mesh position={[0, 1.72, -0.43]} castShadow>
+        <boxGeometry args={[2.95, 1.7, 0.12]} />
+        <meshStandardMaterial color="#F2ECE3" />
+      </mesh>
+      {[1.1, 1.62].map((y) => (
+        <mesh key={`snack-shelf-${y}`} position={[0, y, -0.36]} castShadow>
+          <boxGeometry args={[2.5, 0.05, 0.18]} />
+          <meshStandardMaterial color="#8B6B52" />
+        </mesh>
+      ))}
+      {snackColors.map((color, index) => {
+        const row = Math.floor(index / 4);
+        const col = index % 4;
+        return (
+          <mesh
+            key={`snack-jar-${index}`}
+            position={[-0.98 + col * 0.65, 1.2 + row * 0.54, -0.28]}
+          >
+            <cylinderGeometry args={[0.11, 0.11, 0.2, 14]} />
+            <meshStandardMaterial color={color} />
+          </mesh>
+        );
+      })}
+      {[-0.55, -0.05, 0.45].map((x, index) => (
+        <group key={`snack-tap-${index}`} position={[x, 1.2, 0.08]}>
+          <mesh>
+            <boxGeometry args={[0.12, 0.22, 0.12]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
+          <mesh position={[0, -0.12, 0.06]}>
+            <boxGeometry args={[0.04, 0.06, 0.08]} />
+            <meshStandardMaterial color="#94A3B8" />
+          </mesh>
+        </group>
+      ))}
+      <mesh position={[1.18, 0.72, 0.07]} castShadow>
+        <boxGeometry args={[0.48, 1.44, 0.6]} />
+        <meshStandardMaterial color="#D1D5DB" />
+      </mesh>
+      <mesh position={[1.18, 1.2, 0.39]}>
+        <boxGeometry args={[0.42, 0.9, 0.04]} />
+        <meshStandardMaterial color="#F8FAFC" />
+      </mesh>
+      <mesh position={[1.03, 1.2, 0.43]}>
+        <boxGeometry args={[0.02, 0.24, 0.02]} />
+        <meshStandardMaterial color="#64748B" />
+      </mesh>
+      {[-0.82, 0, 0.82].map((x) => (
+        <group key={`snack-stool-${x}`} position={[x, 0, 1]}>
+          <mesh position={[0, 0.6, 0]} castShadow>
+            <cylinderGeometry args={[0.22, 0.22, 0.08, 16]} />
+            <meshStandardMaterial color="#2F3E4F" />
+          </mesh>
+          <mesh position={[0, 0.3, 0]} castShadow>
+            <cylinderGeometry args={[0.04, 0.05, 0.6, 10]} />
+            <meshStandardMaterial color="#4B5563" />
+          </mesh>
+        </group>
+      ))}
+      <mesh position={[-1.14, 1.12, 0.16]}>
+        <cylinderGeometry args={[0.18, 0.12, 0.1, 14]} />
+        <meshStandardMaterial color="#A16207" />
+      </mesh>
+      {[[-1.2, 1.19, 0.13], [-1.1, 1.2, 0.2], [-1.08, 1.2, 0.11]].map((pos, index) => (
+        <mesh key={`snack-fruit-${index}`} position={pos as [number, number, number]}>
+          <sphereGeometry args={[0.05, 10, 8]} />
+          <meshStandardMaterial color={index === 0 ? "#EF4444" : index === 1 ? "#F97316" : "#FACC15"} />
+        </mesh>
+      ))}
+      <mesh position={[0.1, 2.2, -0.36]}>
+        <boxGeometry args={[1.4, 0.32, 0.04]} />
+        <meshStandardMaterial
+          color="#FDE68A"
+          emissive="#FBBF24"
+          emissiveIntensity={0.45}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 export function Office() {
   const agents = useDemoStore((s) => s.agents);
   const sceneUnlocks = useDemoStore((s) => s.sceneUnlocks);
   const sceneCaps = useDemoStore((s) => s.sceneCaps);
+  const skyMaterialRef = useRef<MeshStandardMaterial>(null);
+  const sunMaterialRef = useRef<MeshStandardMaterial>(null);
+  const moonMaterialRef = useRef<MeshStandardMaterial>(null);
+  const ambientLightRef = useRef<AmbientLight>(null);
+  const sunLightRef = useRef<DirectionalLight>(null);
+  const moonLightRef = useRef<DirectionalLight>(null);
+  const indoorFillARef = useRef<PointLight>(null);
+  const indoorFillBRef = useRef<PointLight>(null);
+  const sunOrbRef = useRef<Object3D>(null);
+  const moonOrbRef = useRef<Object3D>(null);
   const experimentalDecorationsEnabled = useDemoStore(
     (s) => s.experimentalDecorationsEnabled
   );
@@ -728,19 +954,17 @@ export function Office() {
   const exteriorCullDistance = exteriorVisibility.richEnvironment
     ? NON_CRITICAL_CULL_DISTANCE.exteriorTier4
     : NON_CRITICAL_CULL_DISTANCE.exteriorTier3;
+  const visibleExteriorPropCount = Math.max(6, exteriorVisibility.visibleExteriorPropCount);
   const visibleExteriorProps = useMemo(
     () =>
       resolveDistanceCulledItems({
         items: EXTERIOR_PROP_LAYOUT,
-        maxVisibleCount: exteriorVisibility.visibleExteriorPropCount,
+        maxVisibleCount: visibleExteriorPropCount,
         focalPoint: SCENE_FOCAL_POINT,
         maxDistance: exteriorCullDistance,
       }),
-    [exteriorCullDistance, exteriorVisibility.visibleExteriorPropCount]
+    [exteriorCullDistance, visibleExteriorPropCount]
   );
-  const ambientLightIntensity = exteriorVisibility.showBlueSky ? 0.52 : 0.4;
-  const directionalLightIntensity = exteriorVisibility.showBlueSky ? 1.05 : 1.2;
-  const directionalLightColor = exteriorVisibility.showBlueSky ? "#EFF6FF" : "#FFFFFF";
   const visibleAgents = useMemo(
     () => agents.slice(0, deskLayout.length),
     [agents, deskLayout.length]
@@ -764,18 +988,66 @@ export function Office() {
     0
   );
 
+  useFrame(({ clock }) => {
+    const { daylight, moonlight, sunPosition, moonPosition } = resolveCelestialState(clock.getElapsedTime());
+
+    if (sunOrbRef.current) {
+      sunOrbRef.current.position.set(sunPosition[0], sunPosition[1], sunPosition[2]);
+    }
+    if (moonOrbRef.current) {
+      moonOrbRef.current.position.set(moonPosition[0], moonPosition[1], moonPosition[2]);
+    }
+    if (sunLightRef.current) {
+      sunLightRef.current.position.set(sunPosition[0], sunPosition[1], sunPosition[2]);
+      sunLightRef.current.intensity = MathUtils.lerp(0.05, 1.2, daylight);
+      sunLightRef.current.color.setRGB(
+        MathUtils.lerp(0.55, 1, daylight),
+        MathUtils.lerp(0.62, 0.98, daylight),
+        MathUtils.lerp(0.74, 0.9, daylight)
+      );
+    }
+    if (moonLightRef.current) {
+      moonLightRef.current.position.set(moonPosition[0], moonPosition[1], moonPosition[2]);
+      moonLightRef.current.intensity = MathUtils.lerp(0.06, 0.42, moonlight);
+    }
+    if (ambientLightRef.current) {
+      ambientLightRef.current.intensity = MathUtils.lerp(0.2, 0.58, daylight);
+      ambientLightRef.current.color.setRGB(
+        MathUtils.lerp(0.3, 1, daylight),
+        MathUtils.lerp(0.35, 0.98, daylight),
+        MathUtils.lerp(0.5, 0.92, daylight)
+      );
+    }
+    if (indoorFillARef.current) {
+      indoorFillARef.current.intensity = MathUtils.lerp(0.52, 0.18, daylight);
+    }
+    if (indoorFillBRef.current) {
+      indoorFillBRef.current.intensity = MathUtils.lerp(0.46, 0.18, daylight);
+    }
+    if (skyMaterialRef.current) {
+      skyMaterialRef.current.color.copy(NIGHT_SKY_COLOR).lerp(DAY_SKY_COLOR, daylight);
+      skyMaterialRef.current.emissive.copy(NIGHT_SKY_EMISSIVE).lerp(DAY_SKY_EMISSIVE, daylight);
+      skyMaterialRef.current.emissiveIntensity = MathUtils.lerp(0.18, 0.22, daylight);
+    }
+    if (sunMaterialRef.current) {
+      sunMaterialRef.current.emissiveIntensity = MathUtils.lerp(0.22, 1.35, daylight);
+    }
+    if (moonMaterialRef.current) {
+      moonMaterialRef.current.emissiveIntensity = MathUtils.lerp(0.06, 0.7, moonlight);
+    }
+  });
+
   return (
     <group>
-      {exteriorVisibility.showBlueSky && (
-        <SkyDome richEnvironment={exteriorVisibility.richEnvironment} />
-      )}
+      <SkyDome materialRef={skyMaterialRef} />
 
       {/* Lighting */}
-      <ambientLight intensity={ambientLightIntensity} />
+      <ambientLight ref={ambientLightRef} intensity={0.52} />
       <directionalLight
+        ref={sunLightRef}
         position={[5, 8, 5]}
-        intensity={directionalLightIntensity}
-        color={directionalLightColor}
+        intensity={1.05}
+        color="#EFF6FF"
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
@@ -786,10 +1058,35 @@ export function Office() {
         shadow-camera-top={15}
         shadow-camera-bottom={-15}
       />
-      <pointLight position={[-4, 3, -4]} intensity={0.3} color="#FFE4B5" />
-      <pointLight position={[4, 3, -9]} intensity={0.3} color="#FFE4B5" />
+      <directionalLight
+        ref={moonLightRef}
+        position={[-8, 10, -12]}
+        intensity={0.2}
+        color="#93C5FD"
+      />
+      <pointLight ref={indoorFillARef} position={[-4, 3, -4]} intensity={0.3} color="#FFE4B5" />
+      <pointLight ref={indoorFillBRef} position={[4, 3, -9]} intensity={0.3} color="#FFE4B5" />
 
-      {exteriorVisibility.showExteriorPark && (
+      <mesh ref={sunOrbRef} position={[0, 10, CELESTIAL_ORBIT_CENTER_Z]}>
+        <sphereGeometry args={[0.95, 22, 18]} />
+        <meshStandardMaterial
+          ref={sunMaterialRef}
+          color="#FDE68A"
+          emissive="#FDBA74"
+          emissiveIntensity={1}
+        />
+      </mesh>
+      <mesh ref={moonOrbRef} position={[0, -8, CELESTIAL_ORBIT_CENTER_Z]}>
+        <sphereGeometry args={[0.72, 20, 16]} />
+        <meshStandardMaterial
+          ref={moonMaterialRef}
+          color="#E2E8F0"
+          emissive="#93C5FD"
+          emissiveIntensity={0.2}
+        />
+      </mesh>
+
+      {showOutdoorEnvironment && (
         <>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.02, -5]} receiveShadow>
             <planeGeometry args={[42, 36]} />
@@ -803,8 +1100,14 @@ export function Office() {
               opacity={0.75}
             />
           </mesh>
+          <YardBorderShrubs />
         </>
       )}
+
+      <ExteriorCampusBackdrop
+        showBlueSky={showOutdoorEnvironment}
+        richEnvironment={exteriorVisibility.richEnvironment}
+      />
 
       {/* Floor */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, -5]} receiveShadow>
@@ -812,45 +1115,72 @@ export function Office() {
         <meshStandardMaterial color={FLOOR_COLOR} />
       </mesh>
 
-      {/* Back wall */}
-      <mesh position={[0, 2, -14]} receiveShadow>
-        <boxGeometry args={[22, 4, 0.2]} />
-        <meshStandardMaterial color={WALL_COLOR} />
-      </mesh>
+      {/* Back wall with true window openings */}
+      <WallWithWindowOpenings
+        position={[0, 2, -14]}
+        span={22}
+        spanAxis="x"
+        openings={BACK_WINDOW_POSITIONS.map((x) => ({
+          center: x,
+          width: BACK_WINDOW_SIZE.width + WINDOW_OPENING_PADDING,
+        }))}
+        openingCenterY={0.45}
+        openingHeight={BACK_WINDOW_SIZE.height + WINDOW_OPENING_PADDING}
+      />
       {/* Windows kept parallel to wall planes */}
-      {[-7.2, -2.4, 2.4, 7.2].map((x) => (
-        <WallWindow key={`back-window-${x}`} position={[x, 2.45, -13.88]} />
+      {BACK_WINDOW_POSITIONS.map((x) => (
+        <WallWindow
+          key={`back-window-${x}`}
+          position={[x, 2.45, -13.88]}
+          width={BACK_WINDOW_SIZE.width}
+          height={BACK_WINDOW_SIZE.height}
+        />
       ))}
-      {[-10.2, -5.4].map((z) => (
+      {SIDE_WINDOW_POSITIONS.map((z) => (
         <WallWindow
           key={`left-window-${z}`}
           position={[-10.88, 2.35, z]}
           rotation={[0, Math.PI / 2, 0]}
-          width={1.8}
-          height={1.25}
+          width={SIDE_WINDOW_SIZE.width}
+          height={SIDE_WINDOW_SIZE.height}
         />
       ))}
-      {[-10.2, -5.4].map((z) => (
+      {SIDE_WINDOW_POSITIONS.map((z) => (
         <WallWindow
           key={`right-window-${z}`}
           position={[10.88, 2.35, z]}
           rotation={[0, -Math.PI / 2, 0]}
-          width={1.8}
-          height={1.25}
+          width={SIDE_WINDOW_SIZE.width}
+          height={SIDE_WINDOW_SIZE.height}
         />
       ))}
 
-      {/* Left wall */}
-      <mesh position={[-11, 2, -5]} receiveShadow>
-        <boxGeometry args={[0.2, 4, 18]} />
-        <meshStandardMaterial color={WALL_COLOR} />
-      </mesh>
+      {/* Side walls with true window openings */}
+      <WallWithWindowOpenings
+        position={[-11, 2, -5]}
+        span={18}
+        spanAxis="z"
+        openings={SIDE_WINDOW_POSITIONS.map((z) => ({
+          center: z + 5,
+          width: SIDE_WINDOW_SIZE.width + WINDOW_OPENING_PADDING,
+        }))}
+        openingCenterY={0.35}
+        openingHeight={SIDE_WINDOW_SIZE.height + WINDOW_OPENING_PADDING}
+      />
+      <WallWithWindowOpenings
+        position={[11, 2, -5]}
+        span={18}
+        spanAxis="z"
+        openings={SIDE_WINDOW_POSITIONS.map((z) => ({
+          center: z + 5,
+          width: SIDE_WINDOW_SIZE.width + WINDOW_OPENING_PADDING,
+        }))}
+        openingCenterY={0.35}
+        openingHeight={SIDE_WINDOW_SIZE.height + WINDOW_OPENING_PADDING}
+      />
 
-      {/* Right wall */}
-      <mesh position={[11, 2, -5]} receiveShadow>
-        <boxGeometry args={[0.2, 4, 18]} />
-        <meshStandardMaterial color={WALL_COLOR} />
-      </mesh>
+      {/* Office snack bar */}
+      <OfficeSnackBar position={[10.05, 0, 0.95]} rotation={[0, -Math.PI / 2, 0]} />
 
       {/* Ceiling lights */}
       {[
@@ -956,8 +1286,6 @@ export function Office() {
 
       {/* Task board */}
       <TaskBoard position={[0, 1.8, -13.85]} />
-      {/* Office snack bar */}
-      <OfficeSnackBar position={[10.05, 0, 0.95]} rotation={[0, -Math.PI / 2, 0]} />
 
       {/* Tier-gated detail props */}
       {detailProps.slice(0, officeDetailVisibility.visibleDetailPropCount)}
