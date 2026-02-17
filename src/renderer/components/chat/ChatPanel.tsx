@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import type { ChatMessage, ClaudeEvent } from '../../types'
+import { useShallow } from 'zustand/react/shallow'
+import type { AgentEvent, ChatMessage, ClaudeEvent } from '../../types'
 import { randomAppearance } from '../../types'
 import { useAgentStore } from '../../store/agents'
 import { useWorkspaceStore } from '../../store/workspace'
@@ -122,6 +123,24 @@ function truncateForHook(value: string, max = 500): string {
   return `${value.slice(0, max)}…`
 }
 
+function selectRecentOfficeFeedback(events: readonly AgentEvent[], targetAgentId: string | null): string[] {
+  const recentFeedback: string[] = []
+  for (let index = events.length - 1; index >= 0 && recentFeedback.length < 6; index -= 1) {
+    const event = events[index]
+    if (event.type !== 'status_change') continue
+    if (targetAgentId && event.agentId !== targetAgentId) continue
+    if (
+      !event.description.startsWith('Manual celebration:')
+      && !event.description.startsWith('Rewarded +')
+      && !event.description.startsWith('Reward ')
+    ) {
+      continue
+    }
+    recentFeedback.push(event.description)
+  }
+  return recentFeedback
+}
+
 /** Orchid-style typing indicator with cherry blossom */
 function TypingIndicator() {
   return (
@@ -176,10 +195,13 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const getNextDeskIndex = useAgentStore((s) => s.getNextDeskIndex)
   const addEvent = useAgentStore((s) => s.addEvent)
   const addToast = useAgentStore((s) => s.addToast)
-  const events = useAgentStore((s) => s.events)
   const updateChatSession = useAgentStore((s) => s.updateChatSession)
   const chatSession = useAgentStore(
     (s) => s.chatSessions.find((session) => session.id === chatSessionId) ?? null
+  )
+  const targetAgentId = chatSession?.agentId ?? null
+  const recentFeedback = useAgentStore(
+    useShallow(useCallback((state) => selectRecentOfficeFeedback(state.events, targetAgentId), [targetAgentId]))
   )
 
   const workspaceRoot = useWorkspaceStore((s) => s.rootPath)
@@ -210,21 +232,6 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   }, [chatSessionId, rewards])
 
   const officePromptContext = useMemo<OfficePromptContext>(() => {
-    const targetAgentId = chatSession?.agentId ?? null
-    const recentFeedback = [...events]
-      .reverse()
-      .filter((event) => event.type === 'status_change')
-      .filter((event) => {
-        if (targetAgentId && event.agentId !== targetAgentId) return false
-        return (
-          event.description.startsWith('Manual celebration:')
-          || event.description.startsWith('Rewarded +')
-          || event.description.startsWith('Reward ')
-        )
-      })
-      .slice(0, 6)
-      .map((event) => event.description)
-
     return {
       recentFeedback,
       latestReward: latestRewardForChat
@@ -235,7 +242,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
         }
         : null,
     }
-  }, [chatSession?.agentId, events, latestRewardForChat])
+  }, [latestRewardForChat, recentFeedback])
 
   const setActiveClaudeSession = useCallback((sessionId: string | null) => {
     activeClaudeSessionIdRef.current = sessionId
