@@ -426,6 +426,126 @@ function Whiteboard({
   );
 }
 
+function OfficeSnackBar({
+  position,
+  rotation = [0, 0, 0],
+}: {
+  position: [number, number, number];
+  rotation?: [number, number, number];
+}) {
+  const snackColors = ["#F59E0B", "#EF4444", "#22C55E", "#3B82F6", "#EC4899", "#8B5CF6", "#06B6D4", "#F97316"];
+
+  return (
+    <group position={position} rotation={rotation}>
+      {/* Counter + backsplash */}
+      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+        <boxGeometry args={[2.8, 1, 0.95]} />
+        <meshStandardMaterial color="#7C5841" />
+      </mesh>
+      <mesh position={[0, 1.02, -0.02]} castShadow>
+        <boxGeometry args={[2.95, 0.08, 1.02]} />
+        <meshStandardMaterial color="#D9C2A0" />
+      </mesh>
+      <mesh position={[0, 1.72, -0.43]} castShadow>
+        <boxGeometry args={[2.95, 1.7, 0.12]} />
+        <meshStandardMaterial color="#F2ECE3" />
+      </mesh>
+
+      {/* Shelves + chips */}
+      {[1.1, 1.62].map((y) => (
+        <mesh key={`snack-shelf-${y}`} position={[0, y, -0.36]} castShadow>
+          <boxGeometry args={[2.5, 0.05, 0.18]} />
+          <meshStandardMaterial color="#8B6B52" />
+        </mesh>
+      ))}
+      {snackColors.map((color, index) => {
+        const row = Math.floor(index / 4);
+        const col = index % 4;
+        return (
+          <mesh
+            key={`chip-bag-${index}`}
+            position={[-0.98 + col * 0.65, 1.2 + row * 0.54, -0.28]}
+            rotation={[0.02 * (index % 2 ? -1 : 1), 0, 0]}
+          >
+            <boxGeometry args={[0.2, 0.22, 0.07]} />
+            <meshStandardMaterial color={color} />
+          </mesh>
+        );
+      })}
+
+      {/* Drink dispenser with taps */}
+      <mesh position={[1.18, 0.72, 0.07]} castShadow>
+        <boxGeometry args={[0.48, 1.44, 0.6]} />
+        <meshStandardMaterial color="#D1D5DB" />
+      </mesh>
+      <mesh position={[1.18, 1.2, 0.39]}>
+        <boxGeometry args={[0.42, 0.9, 0.04]} />
+        <meshStandardMaterial color="#F8FAFC" />
+      </mesh>
+      {[-0.58, -0.18, 0.22].map((x, index) => (
+        <group key={`snack-tap-${index}`} position={[x, 1.2, 0.08]}>
+          <mesh>
+            <boxGeometry args={[0.12, 0.22, 0.12]} />
+            <meshStandardMaterial color="#334155" />
+          </mesh>
+          <mesh position={[0, -0.12, 0.06]}>
+            <boxGeometry args={[0.04, 0.06, 0.08]} />
+            <meshStandardMaterial color="#94A3B8" />
+          </mesh>
+          <mesh position={[0, -0.2, 0.13]}>
+            <cylinderGeometry args={[0.04, 0.035, 0.1, 12]} />
+            <meshStandardMaterial color="#F8FAFC" />
+          </mesh>
+        </group>
+      ))}
+
+      {/* Mugs on counter */}
+      {[-0.95, -0.68, -0.41].map((x, index) => (
+        <group key={`mug-${index}`} position={[x, 1.09, 0.23]}>
+          <mesh>
+            <cylinderGeometry args={[0.07, 0.065, 0.1, 12]} />
+            <meshStandardMaterial color={index === 1 ? "#38BDF8" : "#F8FAFC"} />
+          </mesh>
+          <mesh position={[0.08, 0, 0]}>
+            <torusGeometry args={[0.03, 0.008, 8, 16]} />
+            <meshStandardMaterial color="#E2E8F0" />
+          </mesh>
+        </group>
+      ))}
+
+      {/* Plates stack */}
+      {[0, 1, 2].map((index) => (
+        <mesh key={`plate-${index}`} position={[-0.15, 1.08 + index * 0.018, 0.2]}>
+          <cylinderGeometry args={[0.14, 0.14, 0.014, 20]} />
+          <meshStandardMaterial color={index % 2 === 0 ? "#F8FAFC" : "#E2E8F0"} />
+        </mesh>
+      ))}
+
+      {/* Fruit bowl */}
+      <mesh position={[-1.14, 1.12, 0.16]}>
+        <cylinderGeometry args={[0.18, 0.12, 0.1, 14]} />
+        <meshStandardMaterial color="#A16207" />
+      </mesh>
+      {[[-1.2, 1.19, 0.13], [-1.1, 1.2, 0.2], [-1.08, 1.2, 0.11]].map((fruit, index) => (
+        <mesh key={`snack-fruit-${index}`} position={fruit as [number, number, number]}>
+          <sphereGeometry args={[0.05, 10, 8]} />
+          <meshStandardMaterial color={index === 0 ? "#EF4444" : index === 1 ? "#F97316" : "#FACC15"} />
+        </mesh>
+      ))}
+
+      {/* Snack bar sign */}
+      <mesh position={[0.1, 2.2, -0.36]}>
+        <boxGeometry args={[1.4, 0.32, 0.04]} />
+        <meshStandardMaterial
+          color="#FDE68A"
+          emissive="#FBBF24"
+          emissiveIntensity={0.45}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function SkyDome({ richEnvironment }: { richEnvironment: boolean }) {
   return (
     <mesh>
@@ -836,6 +956,8 @@ export function Office() {
 
       {/* Task board */}
       <TaskBoard position={[0, 1.8, -13.85]} />
+      {/* Office snack bar */}
+      <OfficeSnackBar position={[10.05, 0, 0.95]} rotation={[0, -Math.PI / 2, 0]} />
 
       {/* Tier-gated detail props */}
       {detailProps.slice(0, officeDetailVisibility.visibleDetailPropCount)}
