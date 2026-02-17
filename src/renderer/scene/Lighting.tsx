@@ -93,9 +93,9 @@ export function Lighting() {
       moonMaterialRef.current.emissiveIntensity = MathUtils.lerp(0.06, 0.7, moonlight)
     }
 
-    const indoorNightBoost = MathUtils.lerp(0.18, 0.52, moonlight)
+    const indoorNightBoost = MathUtils.lerp(0.52, 0.18, daylight)
     if (indoorFillARef.current) indoorFillARef.current.intensity = indoorNightBoost
-    if (indoorFillBRef.current) indoorFillBRef.current.intensity = MathUtils.lerp(0.14, 0.46, moonlight)
+    if (indoorFillBRef.current) indoorFillBRef.current.intensity = MathUtils.lerp(0.46, 0.18, daylight)
     if (indoorFillCRef.current) indoorFillCRef.current.intensity = MathUtils.lerp(0.1, 0.36, moonlight)
     if (indoorFillDRef.current) indoorFillDRef.current.intensity = MathUtils.lerp(0.1, 0.32, moonlight)
   })
