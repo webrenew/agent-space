@@ -40,7 +40,7 @@ jobs:
           if [ ! -f build/icon.icns ]; then
             echo "build/icon.icns missing at tag — fetching from main"
             git fetch origin main
-            git checkout origin/main -- build/icon.icns
+            git checkout FETCH_HEAD -- build/icon.icns
           fi
 
       - name: Derive version from tag
