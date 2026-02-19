@@ -872,6 +872,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
           workingDirectory,
           files,
           mentions,
+          historyMessages: messages,
           officeContext: officePromptContext,
         },
         {

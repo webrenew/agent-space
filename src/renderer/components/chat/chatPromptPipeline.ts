@@ -1,4 +1,4 @@
-import type { ChatRunReward, WorkspaceContextSnapshot } from '../../types'
+import type { ChatMessage, ChatRunReward, WorkspaceContextSnapshot } from '../../types'
 import { buildWorkspaceContextPrompt } from '../../lib/workspaceContext'
 
 const BINARY_EXTENSIONS = new Set([
@@ -11,6 +11,8 @@ const BINARY_EXTENSIONS = new Set([
 ])
 const MENTION_PATTERN = /(?:^|\s)@{([^}\n]+)}|(?:^|\s)@([^\s@]+)/g
 const MAX_REFERENCED_FILES = 12
+const MAX_HISTORY_MESSAGES = 14
+const MAX_HISTORY_CHARS = 12_000
 
 export interface SlashCommandInput {
   name: string
@@ -47,6 +49,7 @@ export interface PrepareChatPromptInput {
   workingDirectory: string
   mentions?: string[]
   files?: File[]
+  historyMessages?: ChatMessage[]
   officeContext?: OfficePromptContext
 }
 
@@ -78,6 +81,14 @@ export interface OfficeRewardContext {
 export interface OfficePromptContext {
   recentFeedback: string[]
   latestReward: OfficeRewardContext | null
+}
+
+function roleLabel(role: ChatMessage['role'], toolName?: string): string {
+  if (role === 'user') return 'User'
+  if (role === 'assistant') return 'Assistant'
+  if (role === 'tool') return toolName ? `Tool (${toolName})` : 'Tool'
+  if (role === 'error') return 'System'
+  return 'Assistant'
 }
 
 export function normalizeMentionPath(value: string): string {
@@ -319,6 +330,57 @@ export function applyReferenceNotesStage(prompt: string, referenceNotes: string[
   return `${prompt}\n\n[Reference notes: ${referenceNotes.join(' | ')}]`
 }
 
+export function applyConversationHistoryStage(input: {
+  prompt: string
+  historyMessages?: ChatMessage[]
+  maxMessages?: number
+  maxChars?: number
+}): string {
+  const history = input.historyMessages ?? []
+  if (history.length === 0) return input.prompt
+
+  const maxMessages = Math.max(1, input.maxMessages ?? MAX_HISTORY_MESSAGES)
+  const maxChars = Math.max(800, input.maxChars ?? MAX_HISTORY_CHARS)
+  const candidates = history
+    .filter((message) => message.role !== 'thinking')
+    .slice(-Math.max(maxMessages * 3, maxMessages))
+  if (candidates.length === 0) return input.prompt
+
+  const selected: string[] = []
+  let consumedChars = 0
+  let omitted = false
+
+  for (let index = candidates.length - 1; index >= 0 && selected.length < maxMessages; index -= 1) {
+    const message = candidates[index]
+    const normalizedContent = message.content.replace(/\0/g, '').trim()
+    if (!normalizedContent) continue
+    const serialized = `[${roleLabel(message.role, message.toolName)}] ${normalizedContent}`
+    if (consumedChars + serialized.length > maxChars) {
+      omitted = true
+      break
+    }
+    selected.push(serialized)
+    consumedChars += serialized.length + 1
+  }
+
+  if (selected.length === 0) return input.prompt
+
+  selected.reverse()
+  if (candidates.length > selected.length) {
+    omitted = true
+  }
+
+  const header = [
+    '[Conversation context]',
+    'Use this transcript as established context from earlier turns in this same chat.',
+  ]
+  if (omitted) {
+    header.push('Earlier turns were omitted for brevity.')
+  }
+
+  return `${header.join('\n')}\n${selected.join('\n')}\n\n[Current user request]\n${input.prompt}`
+}
+
 export function applyWorkspaceContextStage(
   prompt: string,
   workspaceSnapshot: WorkspaceContextSnapshot | null
@@ -361,8 +423,12 @@ export async function prepareChatPrompt(
 ): Promise<PrepareChatPromptResult> {
   const mentionTokens = resolveMentionTokens(input.message, input.mentions)
   const workspaceSnapshot = await loadWorkspaceSnapshotStage(input.workingDirectory, deps)
-  const mentionStage = await applyMentionReferencesStage({
+  const withConversationHistory = applyConversationHistoryStage({
     prompt: input.message,
+    historyMessages: input.historyMessages,
+  })
+  const mentionStage = await applyMentionReferencesStage({
+    prompt: withConversationHistory,
     mentionTokens,
     workingDirectory: input.workingDirectory,
     resolveMentionedFiles: deps.resolveMentionedFiles,
