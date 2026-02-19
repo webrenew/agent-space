@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { WorkspaceContextSnapshot } from '../../src/renderer/types'
 import {
   applyAttachmentFilesStage,
+  applyConversationHistoryStage,
   applyOfficeContextStage,
   applyMentionReferencesStage,
   loadWorkspaceSnapshotStage,
@@ -81,11 +82,57 @@ test('applyAttachmentFilesStage appends text and binary attachment context', asy
   expect(prompt).toContain('[Attached binary files: image.png')
 })
 
+test('applyConversationHistoryStage injects bounded transcript context', () => {
+  const prompt = applyConversationHistoryStage({
+    prompt: 'Please continue from where we left off',
+    historyMessages: [
+      {
+        id: 'm1',
+        role: 'user',
+        content: 'Summarize the auth refactor plan',
+        timestamp: 1,
+      },
+      {
+        id: 'm2',
+        role: 'assistant',
+        content: 'We should migrate middleware first, then handlers.',
+        timestamp: 2,
+      },
+      {
+        id: 'm3',
+        role: 'thinking',
+        content: 'hidden',
+        timestamp: 3,
+      },
+    ],
+  })
+
+  expect(prompt).toContain('[Conversation context]')
+  expect(prompt).toContain('[User] Summarize the auth refactor plan')
+  expect(prompt).toContain('[Assistant] We should migrate middleware first, then handlers.')
+  expect(prompt).not.toContain('hidden')
+  expect(prompt).toContain('[Current user request]')
+})
+
 test('prepareChatPrompt runs staged pipeline and injects workspace context', async () => {
   const snapshot = createSnapshot({ gitBranch: 'feature/pipeline' })
   const prepared = await prepareChatPrompt(
     {
       message: 'Need context for @README',
+      historyMessages: [
+        {
+          id: 'h1',
+          role: 'user',
+          content: 'What changed in the README parser?',
+          timestamp: 1,
+        },
+        {
+          id: 'h2',
+          role: 'assistant',
+          content: 'It now validates frontmatter keys before rendering.',
+          timestamp: 2,
+        },
+      ],
       mentions: undefined,
       files: [createTextFile('note.md', 'draft')],
       workingDirectory: '/tmp/workspace',
@@ -104,6 +151,8 @@ test('prepareChatPrompt runs staged pipeline and injects workspace context', asy
   )
 
   expect(resolveMentionTokens('Need context for @README')).toEqual(['README'])
+  expect(prepared.prompt).toContain('[Conversation context]')
+  expect(prepared.prompt).toContain('[Current user request]')
   expect(prepared.prompt).toContain('Referenced files via @:')
   expect(prepared.prompt).toContain('Attached files:')
   expect(prepared.prompt).toContain('[Workspace context snapshot]')
