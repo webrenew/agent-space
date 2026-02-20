@@ -32,6 +32,9 @@ export function AgentCharacter({
 }: AgentCharacterProps) {
   const rootGroup = useRef<Group>(null)
   const group = useRef<Group>(null)
+  const headRef = useRef<Group>(null)
+  const leftArmRef = useRef<Group>(null)
+  const rightArmRef = useRef<Group>(null)
   const { appearance, status } = agent
   const glow = STATUS_GLOW[status]
   const isPizzaParty = agent.activeCelebration === 'pizza_party' && partyTargetPosition !== null
@@ -65,9 +68,9 @@ export function AgentCharacter({
     group.current.position.x = 0
     group.current.position.y = 0
 
-    const head = group.current.children[0] // head group
-    const leftArm = group.current.children[4]
-    const rightArm = group.current.children[5]
+    const head = headRef.current
+    const leftArm = leftArmRef.current
+    const rightArm = rightArmRef.current
     if (!head || !leftArm || !rightArm) return
 
     // Reset
@@ -77,6 +80,14 @@ export function AgentCharacter({
     head.rotation.z = 0
     leftArm.rotation.x = 0
     rightArm.rotation.x = 0
+
+    if (isPizzaParty) {
+      group.current.position.y = Math.abs(Math.sin(t * 8)) * 0.03
+      head.rotation.y = Math.sin(t * 4.5) * 0.06
+      leftArm.rotation.x = -0.5 + Math.sin(t * 5.2) * 0.25
+      rightArm.rotation.x = -0.5 + Math.sin(t * 5.2 + Math.PI) * 0.25
+      return
+    }
 
     if (isDancing) {
       group.current.position.y = Math.abs(Math.sin(t * 6)) * 0.15
@@ -122,7 +133,7 @@ export function AgentCharacter({
     <group ref={rootGroup} position={position} rotation={rotation}>
       <group ref={group}>
         {/* Head */}
-        <group position={[0, 1.6, 0]}>
+        <group ref={headRef} position={[0, 1.6, 0]}>
           <mesh castShadow>
             <boxGeometry args={[0.6, 0.6, 0.6]} />
             <meshStandardMaterial color={appearance.skinTone} />
@@ -183,7 +194,7 @@ export function AgentCharacter({
         </mesh>
 
         {/* Left Arm */}
-        <group position={[-0.42, 1.05, 0]}>
+        <group ref={leftArmRef} position={[-0.42, 1.05, 0]}>
           <mesh castShadow>
             <boxGeometry args={[0.2, 0.65, 0.2]} />
             <meshStandardMaterial color={appearance.shirtColor} />
@@ -191,7 +202,7 @@ export function AgentCharacter({
         </group>
 
         {/* Right Arm */}
-        <group position={[0.42, 1.05, 0]}>
+        <group ref={rightArmRef} position={[0.42, 1.05, 0]}>
           <mesh castShadow>
             <boxGeometry args={[0.2, 0.65, 0.2]} />
             <meshStandardMaterial color={appearance.shirtColor} />
