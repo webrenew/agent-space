@@ -612,8 +612,19 @@ function WallWindow({
   width?: number;
   height?: number;
 }) {
+  const glassMaterialRef = useRef<MeshStandardMaterial | null>(null);
+
   const glassRef = useCallback((mat: MeshStandardMaterial | null) => {
-    if (mat) registerWindowGlassWeb(mat);
+    if (mat) {
+      glassMaterialRef.current = mat;
+      registerWindowGlassWeb(mat);
+      return;
+    }
+
+    if (glassMaterialRef.current) {
+      unregisterWindowGlassWeb(glassMaterialRef.current);
+      glassMaterialRef.current = null;
+    }
   }, []);
 
   return (
@@ -1444,6 +1455,13 @@ const windowGlassMaterials: MeshStandardMaterial[] = [];
 function registerWindowGlassWeb(mat: MeshStandardMaterial): void {
   if (!windowGlassMaterials.includes(mat)) {
     windowGlassMaterials.push(mat);
+  }
+}
+
+function unregisterWindowGlassWeb(mat: MeshStandardMaterial): void {
+  const index = windowGlassMaterials.indexOf(mat);
+  if (index !== -1) {
+    windowGlassMaterials.splice(index, 1);
   }
 }
 

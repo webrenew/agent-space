@@ -1,7 +1,7 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import type { MeshStandardMaterial } from 'three'
 import { DoubleSide } from 'three'
-import { registerWindowGlass } from './window-glass-registry'
+import { registerWindowGlass, unregisterWindowGlass } from './window-glass-registry'
 
 const WALL_COLOR = '#e8e0d8'
 const FLOOR_COLOR = '#d4a574'
@@ -64,8 +64,19 @@ function WallWindow({
   width = 2,
   height = 1.35,
 }: WallWindowProps) {
+  const glassMaterialRef = useRef<MeshStandardMaterial | null>(null)
+
   const glassRef = useCallback((mat: MeshStandardMaterial | null) => {
-    if (mat) registerWindowGlass(mat)
+    if (mat) {
+      glassMaterialRef.current = mat
+      registerWindowGlass(mat)
+      return
+    }
+
+    if (glassMaterialRef.current) {
+      unregisterWindowGlass(glassMaterialRef.current)
+      glassMaterialRef.current = null
+    }
   }, [])
 
   return (
