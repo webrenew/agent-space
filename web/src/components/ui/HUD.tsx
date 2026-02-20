@@ -664,18 +664,17 @@ function TopBar({
 
   return (
     <header
-      className="glass-panel"
+      className="glass-panel px-2 sm:px-3 md:px-4"
       style={{
         position: "fixed",
         top: 0,
         left: 0,
         right: 0,
         zIndex: 40,
-        height: 36,
+        height: 38,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "0 16px",
         borderTop: "none",
         borderLeft: "none",
         borderRight: "none",
@@ -683,7 +682,7 @@ function TopBar({
       }}
     >
       <div
-        style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 0 }}
+        style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}
       >
         <input
           ref={folderInputRef}
@@ -696,10 +695,12 @@ function TopBar({
         <span style={{ color: "#9A9692", fontSize: 12, fontWeight: 500 }}>
           Live Demo
         </span>
-        <span style={{ color: "#595653" }}>|</span>
+        <span className="hidden lg:inline" style={{ color: "#595653" }}>
+          |
+        </span>
         <nav
           ref={menuRootRef}
-          className="hidden items-center gap-14 md:flex"
+          className="hidden items-center gap-6 lg:flex xl:gap-10"
           style={{ position: "relative" }}
         >
           {openMenu && (
@@ -966,31 +967,38 @@ function TopBar({
       </div>
 
       <div
+        className="min-w-0"
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 12,
+          gap: 8,
           color: "#74747C",
-          fontSize: 12,
+          fontSize: 11,
           whiteSpace: "nowrap",
         }}
       >
-        <span className="glow-amber hidden md:inline" style={{ color: "#9A9692" }}>
+        <span className="glow-amber hidden xl:inline" style={{ color: "#9A9692" }}>
           agent-observer
         </span>
-        <span style={{ color: "#595653" }}>|</span>
+        <span className="hidden xl:inline" style={{ color: "#595653" }}>
+          |
+        </span>
         <span>
           <strong style={{ color: "#9A9692" }}>{activeCount}</strong>
           <span style={{ color: "#595653" }}>/{agentCount}</span> active
         </span>
-        <span style={{ color: "#595653" }}>|</span>
-        <span>
+        <span className="hidden sm:inline" style={{ color: "#595653" }}>
+          |
+        </span>
+        <span className="hidden sm:inline">
           <strong style={{ color: "#9A9692" }}>{formatTokens(totalTokens)}</strong>{" "}
           tokens
         </span>
-        <span style={{ color: "#595653" }}>|</span>
+        <span className="hidden md:inline" style={{ color: "#595653" }}>
+          |
+        </span>
         <button
-          className="hover-row"
+          className="hover-row hidden sm:inline-flex"
           onClick={toggleExperimentalDecorations}
           style={{
             border: "1px solid rgba(89,86,83,0.35)",
@@ -1006,8 +1014,12 @@ function TopBar({
         >
           Decor {experimentalDecorationsEnabled ? "On" : "Off"}
         </button>
-        <span style={{ color: "#595653" }}>|</span>
-        <span style={{ color: "#9A9692" }}>{timeStr}</span>
+        <span className="hidden lg:inline" style={{ color: "#595653" }}>
+          |
+        </span>
+        <span className="hidden lg:inline" style={{ color: "#9A9692" }}>
+          {timeStr}
+        </span>
       </div>
     </header>
   );
@@ -1326,25 +1338,32 @@ export function HUD() {
           style={{
             borderRadius: 8,
             border: "1px solid rgba(89,86,83,0.28)",
-            padding: "7px 10px",
-            display: "flex",
-            justifyContent: "space-between",
+            padding: "7px 10px 7px 48px",
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            columnGap: 12,
+            rowGap: 4,
             color: "#74747C",
             fontSize: 11,
           }}
         >
-          <span>
+          <span style={{ whiteSpace: "nowrap" }}>
             active <strong style={{ color: "#9A9692" }}>{activeCount}</strong>
           </span>
-          <span>
+          <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>
             tokens <strong style={{ color: "#9A9692" }}>{formatTokens(totalTokens)}</strong>
           </span>
-          <Link href="/docs" style={{ color: "#548C5A", fontWeight: 600 }}>
+          <Link href="/docs" style={{ color: "#548C5A", fontWeight: 600, whiteSpace: "nowrap" }}>
             docs
           </Link>
           <a
             href={AGENT_SPACE_INSTALLER_URL}
-            style={{ color: "#d4a040", fontWeight: 600 }}
+            style={{
+              color: "#d4a040",
+              fontWeight: 600,
+              textAlign: "right",
+              whiteSpace: "nowrap",
+            }}
           >
             macOS install
           </a>
