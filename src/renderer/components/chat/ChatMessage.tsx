@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { ChatMessage as ChatMessageType } from '../../types'
 
 interface Props {
@@ -152,10 +152,148 @@ function summarizeToolInput(input: Record<string, unknown>): string {
   return ''
 }
 
+const EXTERNAL_URL_PROTOCOLS = new Set(['http:', 'https:'])
+const INLINE_SPECIAL_TOKEN_PATTERN = /\*\*|__|\[|https?:\/\//g
+const PLAIN_URL_PATTERN = /^https?:\/\/[^\s<>"'`]+/
+const TRAILING_URL_PUNCTUATION_PATTERN = /[.,!?;:]+$/
+
+function toSafeExternalUrl(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(rawUrl)
+    if (!EXTERNAL_URL_PROTOCOLS.has(parsed.protocol)) return null
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+function splitTrailingUrlPunctuation(rawUrl: string): { url: string; trailing: string } {
+  const match = rawUrl.match(TRAILING_URL_PUNCTUATION_PATTERN)
+  if (!match) {
+    return { url: rawUrl, trailing: '' }
+  }
+  const cutIndex = rawUrl.length - match[0].length
+  return {
+    url: rawUrl.slice(0, cutIndex),
+    trailing: rawUrl.slice(cutIndex),
+  }
+}
+
+function findNextInlineSpecialToken(text: string, startAt: number): number {
+  INLINE_SPECIAL_TOKEN_PATTERN.lastIndex = startAt
+  const match = INLINE_SPECIAL_TOKEN_PATTERN.exec(text)
+  return match ? match.index : -1
+}
+
+function renderInlineAssistantText(text: string, keyPrefix: string): ReactNode[] {
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  let nodeIndex = 0
+
+  const pushPlainText = (value: string) => {
+    if (!value) return
+    nodes.push(
+      <span key={`${keyPrefix}-text-${nodeIndex++}`} style={{ color: '#9A9692' }}>
+        {value}
+      </span>
+    )
+  }
+
+  while (cursor < text.length) {
+    const boldMarker = text.startsWith('**', cursor)
+      ? '**'
+      : text.startsWith('__', cursor)
+        ? '__'
+        : null
+
+    if (boldMarker) {
+      const end = text.indexOf(boldMarker, cursor + boldMarker.length)
+      if (end > cursor + boldMarker.length) {
+        const boldContent = text.slice(cursor + boldMarker.length, end)
+        nodes.push(
+          <strong key={`${keyPrefix}-bold-${nodeIndex++}`} style={{ color: '#d8d3cf', fontWeight: 700 }}>
+            {renderInlineAssistantText(boldContent, `${keyPrefix}-bold-${nodeIndex}`)}
+          </strong>
+        )
+        cursor = end + boldMarker.length
+        continue
+      }
+    }
+
+    if (text[cursor] === '[') {
+      const closeBracket = text.indexOf(']', cursor + 1)
+      if (closeBracket !== -1 && text[closeBracket + 1] === '(') {
+        const closeParen = text.indexOf(')', closeBracket + 2)
+        if (closeParen !== -1 && closeParen > closeBracket + 2) {
+          const label = text.slice(cursor + 1, closeBracket).trim()
+          const rawUrl = text.slice(closeBracket + 2, closeParen).trim()
+          const safeUrl = toSafeExternalUrl(rawUrl)
+          if (safeUrl) {
+            nodes.push(
+              <a
+                key={`${keyPrefix}-md-link-${nodeIndex++}`}
+                href={safeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: '#76a8f5', textDecoration: 'underline' }}
+              >
+                {label || safeUrl}
+              </a>
+            )
+            cursor = closeParen + 1
+            continue
+          }
+        }
+      }
+    }
+
+    const plainUrlMatch = PLAIN_URL_PATTERN.exec(text.slice(cursor))
+    if (plainUrlMatch && plainUrlMatch.index === 0) {
+      const rawUrl = plainUrlMatch[0]
+      const { url, trailing } = splitTrailingUrlPunctuation(rawUrl)
+      const safeUrl = toSafeExternalUrl(url)
+      if (safeUrl) {
+        nodes.push(
+          <a
+            key={`${keyPrefix}-link-${nodeIndex++}`}
+            href={safeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: '#76a8f5', textDecoration: 'underline' }}
+          >
+            {url}
+          </a>
+        )
+        if (trailing) {
+          pushPlainText(trailing)
+        }
+        cursor += rawUrl.length
+        continue
+      }
+    }
+
+    const nextSpecialToken = findNextInlineSpecialToken(text, cursor + 1)
+    if (nextSpecialToken === -1) {
+      pushPlainText(text.slice(cursor))
+      break
+    }
+    if (nextSpecialToken === cursor) {
+      pushPlainText(text[cursor] ?? '')
+      cursor += 1
+      continue
+    }
+
+    pushPlainText(text.slice(cursor, nextSpecialToken))
+    cursor = nextSpecialToken
+  }
+
+  return nodes
+}
+
 /** Render assistant text as orchid-style content (plain text, bullets, code blocks) */
 function AssistantContent({ text }: { text: string }) {
   const lines = text.split('\n')
-  const elements: React.ReactNode[] = []
+  const elements: ReactNode[] = []
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -163,10 +301,13 @@ function AssistantContent({ text }: { text: string }) {
 
     // Bullet points (- or * or •)
     if (/^[-*•]\s/.test(trimmed)) {
+      const bulletText = trimmed.replace(/^[-*•]\s+/, '')
       elements.push(
         <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 3 }}>
           <span style={{ color: '#595653' }}>&#8226;</span>
-          <span style={{ color: '#9A9692' }}>{trimmed.replace(/^[-*•]\s+/, '')}</span>
+          <span style={{ color: '#9A9692' }}>
+            {renderInlineAssistantText(bulletText, `assistant-bullet-${i}`)}
+          </span>
         </div>
       )
     }
@@ -178,7 +319,7 @@ function AssistantContent({ text }: { text: string }) {
     else {
       elements.push(
         <p key={i} style={{ color: '#9A9692', margin: '4px 0', fontSize: 'inherit' }}>
-          {trimmed}
+          {renderInlineAssistantText(trimmed, `assistant-line-${i}`)}
         </p>
       )
     }

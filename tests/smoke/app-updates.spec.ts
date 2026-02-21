@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import {
   __testOnlyCompareSemver,
   __testOnlyIsUpdateAvailable,
+  __testOnlyShouldStartPackagedUpdateCheck,
 } from '../../src/main/app-updates'
 
 test('semver comparison handles v-prefix and major/minor/patch ordering', () => {
@@ -24,4 +25,11 @@ test('update availability is true only when latest is newer than current', () =>
   expect(__testOnlyIsUpdateAvailable('1.3.0', '1.2.9')).toBe(false)
   expect(__testOnlyIsUpdateAvailable('not-semver', '1.2.0')).toBe(false)
   expect(__testOnlyIsUpdateAvailable('1.2.0', 'not-semver')).toBe(false)
+})
+
+test('packaged updater cadence helper enforces interval boundary', () => {
+  expect(__testOnlyShouldStartPackagedUpdateCheck(30_000, 0, 30_000)).toBe(true)
+  expect(__testOnlyShouldStartPackagedUpdateCheck(29_999, 0, 30_000)).toBe(false)
+  expect(__testOnlyShouldStartPackagedUpdateCheck(100_000, 75_000, 30_000)).toBe(false)
+  expect(__testOnlyShouldStartPackagedUpdateCheck(105_000, 75_000, 30_000)).toBe(true)
 })

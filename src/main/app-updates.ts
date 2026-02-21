@@ -8,6 +8,7 @@ const GITHUB_OWNER = 'webrenew'
 const GITHUB_REPO = 'agent-observer'
 const UPDATE_CHECK_TIMEOUT_MS = 7_000
 const UPDATE_CHECK_CACHE_MS = 30 * 60 * 1_000
+const PACKAGED_UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1_000
 
 let handlersRegistered = false
 let cachedStatus: AppUpdateStatusResult | null = null
@@ -15,8 +16,9 @@ let cacheTimestampMs = 0
 let pendingStatusPromise: Promise<AppUpdateStatusResult> | null = null
 let liveStatus: AppUpdateStatusResult = baseStatus(getAppVersion())
 let updaterInitialized = false
-let updaterCheckStarted = false
 let updaterCheckPromise: Promise<void> | null = null
+let lastPackagedUpdateCheckStartedAtMs = 0
+let periodicPackagedUpdateCheckTimer: ReturnType<typeof setInterval> | null = null
 
 function getAppVersion(): string {
   try {
@@ -49,6 +51,14 @@ export function __testOnlyCompareSemver(left: string, right: string): number {
 
 export function __testOnlyIsUpdateAvailable(currentVersion: string, latestVersion: string): boolean {
   return __testOnlyCompareSemver(latestVersion, currentVersion) > 0
+}
+
+export function __testOnlyShouldStartPackagedUpdateCheck(
+  nowMs: number,
+  lastCheckStartedAtMs: number,
+  checkIntervalMs: number
+): boolean {
+  return (nowMs - lastCheckStartedAtMs) >= checkIntervalMs
 }
 
 function baseStatus(currentVersion: string): AppUpdateStatusResult {
@@ -257,11 +267,27 @@ function initializeAutoUpdaterIfNeeded(): void {
       downloadPercent: null,
     })
   })
+
+  if (!periodicPackagedUpdateCheckTimer) {
+    periodicPackagedUpdateCheckTimer = setInterval(() => {
+      ensureAutoUpdaterCheckStarted()
+    }, PACKAGED_UPDATE_CHECK_INTERVAL_MS)
+    periodicPackagedUpdateCheckTimer.unref?.()
+  }
 }
 
-function ensureAutoUpdaterCheckStarted(): void {
-  if (updaterCheckStarted || updaterCheckPromise) return
-  updaterCheckStarted = true
+function ensureAutoUpdaterCheckStarted(options?: { force?: boolean }): void {
+  if (updaterCheckPromise) return
+  const now = Date.now()
+  if (
+    !options?.force
+    && !__testOnlyShouldStartPackagedUpdateCheck(
+      now,
+      lastPackagedUpdateCheckStartedAtMs,
+      PACKAGED_UPDATE_CHECK_INTERVAL_MS
+    )
+  ) return
+  lastPackagedUpdateCheckStartedAtMs = now
   updaterCheckPromise = autoUpdater.checkForUpdates()
     .then((result) => {
       if (!result?.updateInfo) {
@@ -287,7 +313,6 @@ function ensureAutoUpdaterCheckStarted(): void {
       }
     })
     .catch((err) => {
-      updaterCheckStarted = false
       publishStatus({
         phase: 'error',
         error: normalizeUpdateError(err),
@@ -333,4 +358,9 @@ export function setupUpdateHandlers(): void {
       return false
     }
   })
+
+  if (app.isPackaged) {
+    initializeAutoUpdaterIfNeeded()
+    ensureAutoUpdaterCheckStarted({ force: true })
+  }
 }

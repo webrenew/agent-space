@@ -35,6 +35,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `/download` now scans recent releases for the newest available `.dmg`.
 - Release automation now uploads `latest-mac.yml` and `.dmg.blockmap` metadata
   assets required by in-app auto-updates.
+- Packaged builds now re-check for updates periodically after startup, and the
+  in-app update banner appears as soon as an update is available/downloading.
+- Desktop 3D office now uses the full web-parity scene reskin modules and layout.
+- Fixed chat prompt history capture so each new message includes the latest
+  conversation context from prior turns in the active chat.
+- Assistant chat messages now render inline bold markdown and clickable
+  HTTP(S) links directly in the desktop chat pane.
 
 ## [1.1.0] - 2026-02-15
 

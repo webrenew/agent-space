@@ -169,6 +169,8 @@ function TypingIndicator() {
 
 export function ChatPanel({ chatSessionId }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  const messagesRef = useRef<ChatMessage[]>(messages)
+  messagesRef.current = messages
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null)
   const [status, setStatus] = useState<SessionStatus>('idle')
   const [fallbackWorkingDir, setFallbackWorkingDir] = useState<string | null>(null)
@@ -872,7 +874,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
           workingDirectory,
           files,
           mentions,
-          historyMessages: messages,
+          historyMessages: messagesRef.current,
           officeContext: officePromptContext,
         },
         {

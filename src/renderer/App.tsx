@@ -83,6 +83,10 @@ export function App() {
     updateStatus?.releaseUrl || 'https://github.com/webrenew/agent-observer/releases/latest'
   ), [updateStatus?.releaseUrl])
 
+  const openUpdateDownloadPage = useCallback(() => {
+    window.open(updateDownloadUrl, '_blank', 'noopener,noreferrer')
+  }, [updateDownloadUrl])
+
   const handleInstallUpdate = useCallback(() => {
     if (installingUpdate) return
     setInstallingUpdate(true)
@@ -91,15 +95,36 @@ export function App() {
         const accepted = await window.electronAPI.updates.installAndRestart()
         if (!accepted) {
           setInstallingUpdate(false)
-          window.open(updateDownloadUrl, '_blank', 'noopener,noreferrer')
+          openUpdateDownloadPage()
         }
       } catch (err) {
         setInstallingUpdate(false)
         console.warn('[App] install update failed:', err)
-        window.open(updateDownloadUrl, '_blank', 'noopener,noreferrer')
+        openUpdateDownloadPage()
       }
     })()
-  }, [installingUpdate, updateDownloadUrl])
+  }, [installingUpdate, openUpdateDownloadPage])
+
+  const normalizedLatestVersion = updateStatus?.latestVersion
+    ? updateStatus.latestVersion.replace(/^v/i, '')
+    : null
+
+  const updateBannerMessage = useMemo(() => {
+    if (!updateStatus) return null
+    const versionSuffix = normalizedLatestVersion ? ` (v${normalizedLatestVersion})` : ''
+    if (updateStatus.canInstall) return `Update ready${versionSuffix}.`
+    if (!updateStatus.updateAvailable) return null
+
+    if (updateStatus.phase === 'downloading') {
+      const progress = updateStatus.downloadPercent
+      const progressText = typeof progress === 'number' && Number.isFinite(progress)
+        ? ` ${Math.round(progress)}%`
+        : ''
+      return `Update available${versionSuffix}. Downloading…${progressText}`
+    }
+
+    return `Update available${versionSuffix}.`
+  }, [normalizedLatestVersion, updateStatus])
 
   return (
     <div className="w-full h-full" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -108,7 +133,7 @@ export function App() {
           <WorkspaceLayout />
         </ErrorBoundary>
       </div>
-      {updateStatus?.canInstall ? (
+      {updateBannerMessage ? (
         <div
           style={{
             position: 'fixed',
@@ -127,27 +152,44 @@ export function App() {
             fontSize: 12,
           }}
         >
-          <span>
-            Update ready{updateStatus.latestVersion ? ` (v${updateStatus.latestVersion.replace(/^v/i, '')})` : ''}.
-          </span>
-          <button
-            type="button"
-            onClick={handleInstallUpdate}
-            disabled={installingUpdate}
-            style={{
-              border: '1px solid rgba(84, 140, 90, 0.6)',
-              background: installingUpdate ? '#2a2f2a' : '#1E2920',
-              color: installingUpdate ? '#9A9692' : '#d8dfd3',
-              borderRadius: 6,
-              fontSize: 11,
-              fontWeight: 600,
-              padding: '6px 10px',
-              cursor: installingUpdate ? 'default' : 'pointer',
-              opacity: installingUpdate ? 0.75 : 1,
-            }}
-          >
-            {installingUpdate ? 'Restarting…' : 'Install update and restart'}
-          </button>
+          <span>{updateBannerMessage}</span>
+          {updateStatus?.canInstall ? (
+            <button
+              type="button"
+              onClick={handleInstallUpdate}
+              disabled={installingUpdate}
+              style={{
+                border: '1px solid rgba(84, 140, 90, 0.6)',
+                background: installingUpdate ? '#2a2f2a' : '#1E2920',
+                color: installingUpdate ? '#9A9692' : '#d8dfd3',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '6px 10px',
+                cursor: installingUpdate ? 'default' : 'pointer',
+                opacity: installingUpdate ? 0.75 : 1,
+              }}
+            >
+              {installingUpdate ? 'Restarting…' : 'Install update and restart'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={openUpdateDownloadPage}
+              style={{
+                border: '1px solid rgba(84, 140, 90, 0.6)',
+                background: '#1E2920',
+                color: '#d8dfd3',
+                borderRadius: 6,
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '6px 10px',
+                cursor: 'pointer',
+              }}
+            >
+              Open release
+            </button>
+          )}
         </div>
       ) : null}
       {isSettingsOpen ? (
