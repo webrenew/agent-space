@@ -37,6 +37,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   assets required by in-app auto-updates.
 - Packaged builds now re-check for updates periodically after startup, and the
   in-app update banner appears as soon as an update is available/downloading.
+- Desktop 3D office now uses the full web-parity scene reskin modules and layout.
+- Fixed chat prompt history capture so each new message includes the latest
+  conversation context from prior turns in the active chat.
 
 ## [1.1.0] - 2026-02-15
 
