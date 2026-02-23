@@ -13,6 +13,7 @@ import { assertAppNotShuttingDown } from './shutdown-state'
 
 interface ClaudeSessionOptions {
   prompt: string
+  conversationId?: string
   model?: string
   systemPrompt?: string
   allowedTools?: string[]
@@ -57,6 +58,7 @@ const CLAUDE_SESSION_FORCE_KILL_TIMEOUT_MS = 5_000
 const CLAUDE_SESSION_STDERR_MAX_CHARS = 4_000
 const CLAUDE_AVAILABILITY_TIMEOUT_MS = 5_000
 const CLAUDE_AVAILABILITY_CACHE_TTL_MS = 30_000
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function resolveSessionMaxRuntimeMs(): number {
   const raw = process.env.AGENT_SPACE_CLAUDE_MAX_RUNTIME_MS
@@ -300,6 +302,10 @@ async function checkClaudeAvailability(): Promise<ClaudeAvailabilityResult> {
 
 function generateSessionId(): string {
   return `chat-${++sessionCounter}-${Date.now()}`
+}
+
+function isValidConversationId(value: string | undefined): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value)
 }
 
 export function __testOnlyResolveClaudeEventTargetIds(
@@ -548,6 +554,10 @@ function startSession(options: ClaudeSessionOptions, ownerWebContentsId: number)
 
   if (options.model) {
     args.push('--model', options.model)
+  }
+
+  if (options.conversationId) {
+    args.push('--session-id', options.conversationId)
   }
 
   if (options.systemPrompt) {
@@ -826,8 +836,16 @@ export function setupClaudeSessionHandlers(_mainWindow: BrowserWindow): void {
     if (typeof opts.prompt !== 'string' || !opts.prompt.trim()) {
       throw new Error('claude:start requires a non-empty prompt string')
     }
+    const rawConversationId = typeof opts.conversationId === 'string'
+      ? opts.conversationId.trim()
+      : ''
+    const conversationId = rawConversationId.length > 0 ? rawConversationId : undefined
+    if (conversationId && !isValidConversationId(conversationId)) {
+      throw new Error('claude:start conversationId must be a valid UUID')
+    }
     const validated: ClaudeSessionOptions = {
       prompt: opts.prompt,
+      conversationId,
       model: typeof opts.model === 'string' ? opts.model : undefined,
       systemPrompt: typeof opts.systemPrompt === 'string' ? opts.systemPrompt : undefined,
       allowedTools: Array.isArray(opts.allowedTools) ? opts.allowedTools.filter((t): t is string => typeof t === 'string') : undefined,

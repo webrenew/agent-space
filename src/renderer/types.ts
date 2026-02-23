@@ -460,6 +460,7 @@ export interface ChatMessage {
 
 export interface ClaudeSessionOptions {
   prompt: string
+  conversationId?: string
   model?: string
   systemPrompt?: string
   allowedTools?: string[]

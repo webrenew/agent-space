@@ -15,6 +15,7 @@ export interface ChatSessionInfo {
   id: string
   label: string
   agentId: string | null
+  claudeConversationId: string
   scopeId: string | null
   workingDirectory: string | null
   directoryMode: 'workspace' | 'custom'
@@ -82,6 +83,7 @@ const TEMP_SMOKE_PATTERN = /(?:^|\/)agent-observer-smoke-[^/]+(?:\/|$)/
 interface PersistedChatSession {
   id: string
   label: string
+  claudeConversationId: string
   scopeId: string | null
   workingDirectory: string | null
   directoryMode: 'workspace' | 'custom'
@@ -102,6 +104,22 @@ function normalizePath(value: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
+function createConversationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const rand = Math.floor(Math.random() * 16)
+    const value = char === 'x' ? rand : (rand & 0x3) | 0x8
+    return value.toString(16)
+  })
+}
+
+function isConversationId(value: string | null | undefined): value is string {
+  if (!value) return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 function isEphemeralSmokeWorkspace(path: string): boolean {
   const normalized = path.replace(/\\/g, '/')
   if (!TEMP_SMOKE_PATTERN.test(normalized)) return false
@@ -115,6 +133,12 @@ function normalizePersistedChatSession(value: unknown): PersistedChatSession | n
 
   const labelRaw = typeof value.label === 'string' ? value.label.trim() : ''
   const label = labelRaw.length > 0 ? labelRaw : 'Chat'
+  const conversationIdRaw = typeof value.claudeConversationId === 'string'
+    ? value.claudeConversationId.trim()
+    : ''
+  const claudeConversationId = isConversationId(conversationIdRaw)
+    ? conversationIdRaw
+    : createConversationId()
   const scopeId = typeof value.scopeId === 'string' ? value.scopeId : null
   const workingDirectoryCandidate = normalizePath(
     typeof value.workingDirectory === 'string' ? value.workingDirectory : null
@@ -128,6 +152,7 @@ function normalizePersistedChatSession(value: unknown): PersistedChatSession | n
   return {
     id,
     label,
+    claudeConversationId,
     scopeId,
     workingDirectory,
     directoryMode,
@@ -181,10 +206,14 @@ function savePersistedChatState(
         : null
       const directoryMode: 'workspace' | 'custom' =
         workingDirectory && session.directoryMode === 'custom' ? 'custom' : 'workspace'
+      const claudeConversationId = isConversationId(session.claudeConversationId)
+        ? session.claudeConversationId
+        : createConversationId()
 
       return {
         id: session.id,
         label: session.label,
+        claudeConversationId,
         scopeId: session.scopeId,
         workingDirectory,
         directoryMode,
@@ -242,8 +271,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   addChatSession: (info) =>
     set((state) => {
-      const chatSessions = [...state.chatSessions, info]
-      const activeChatSessionId = info.id
+      const normalizedInfo: ChatSessionInfo = {
+        ...info,
+        claudeConversationId: isConversationId(info.claudeConversationId)
+          ? info.claudeConversationId
+          : createConversationId(),
+      }
+      const chatSessions = [...state.chatSessions, normalizedInfo]
+      const activeChatSessionId = normalizedInfo.id
       savePersistedChatState(chatSessions, activeChatSessionId)
       return { chatSessions, activeChatSessionId }
     }),
@@ -276,7 +311,15 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   updateChatSession: (id, updates) =>
     set((state) => {
-      const chatSessions = state.chatSessions.map((s) => (s.id === id ? { ...s, ...updates } : s))
+      const normalizedUpdates: Partial<ChatSessionInfo> = updates.claudeConversationId === undefined
+        ? updates
+        : {
+          ...updates,
+          claudeConversationId: isConversationId(updates.claudeConversationId)
+            ? updates.claudeConversationId
+            : createConversationId(),
+        }
+      const chatSessions = state.chatSessions.map((s) => (s.id === id ? { ...s, ...normalizedUpdates } : s))
       savePersistedChatState(chatSessions, state.activeChatSessionId)
       return { chatSessions }
     }),

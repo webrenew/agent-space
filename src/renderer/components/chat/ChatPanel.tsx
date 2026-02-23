@@ -958,6 +958,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       })
       const profileForRun = resolveClaudeProfile(claudeProfilesConfig, workingDirectory)
       const agentId = ensureChatAgentForRun(message)
+      const conversationId = chatSession?.claudeConversationId
 
       const currentAgent = useAgentStore.getState().agents.find((agent) => agent.id === agentId)
       runTokenBaselineRef.current = {
@@ -994,6 +995,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
       try {
         const result = await window.electronAPI.claude.start({
           prompt: promptForSend,
+          conversationId,
           workingDirectory,
           dangerouslySkipPermissions: yoloMode,
         })
@@ -1021,6 +1023,7 @@ export function ChatPanel({ chatSessionId }: ChatPanelProps) {
     },
     [
       appendUserMessageAndEmitHook,
+      chatSession?.claudeConversationId,
       chatSessionId,
       claudeProfilesConfig,
       ensureChatAgentForRun,
