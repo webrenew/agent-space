@@ -257,16 +257,25 @@ export async function applyMentionReferencesStage(input: {
   const referenceNotes: string[] = []
   const referencedContents: string[] = []
 
-  for (const ref of resolved) {
-    try {
+  const fileResults = await Promise.allSettled(
+    resolved.map(async (ref) => {
       const fileData = await readReferencedFile(ref.path)
+      return { ref, fileData }
+    })
+  )
+
+  for (let i = 0; i < fileResults.length; i++) {
+    const result = fileResults[i]
+    if (result.status === 'fulfilled') {
+      const { ref, fileData } = result.value
       const safeText = fileData.content.replace(/\0/g, '')
       referencedContents.push(`\n--- Referenced file: ${ref.relPath} ---\n${safeText}\n--- End: ${ref.relPath} ---`)
       if (fileData.truncated) {
         referenceNotes.push(`${ref.relPath} (truncated to 2MB preview)`)
       }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
+    } else {
+      const ref = resolved[i]
+      const errorMessage = result.reason instanceof Error ? result.reason.message : String(result.reason)
       referenceNotes.push(`${ref.relPath} (failed to read: ${errorMessage})`)
     }
   }
@@ -300,19 +309,29 @@ export async function applyAttachmentFilesStage(input: {
   const fileContents: string[] = []
   const binaryFiles: string[] = []
 
+  const textFiles: File[] = []
   for (const file of files) {
-    try {
-      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-      if (BINARY_EXTENSIONS.has(ext)) {
-        binaryFiles.push(file.name)
-        continue
-      }
-      const text = await file.text()
-      const safeText = text.replace(/\0/g, '')
-      fileContents.push(`\n--- File: ${file.name} ---\n${safeText}\n--- End: ${file.name} ---`)
-    } catch {
-      // Best effort only: failures should not block sending the prompt.
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+    if (BINARY_EXTENSIONS.has(ext)) {
+      binaryFiles.push(file.name)
+    } else {
+      textFiles.push(file)
     }
+  }
+
+  const textResults = await Promise.allSettled(
+    textFiles.map(async (file) => {
+      const text = await file.text()
+      return { name: file.name, text }
+    })
+  )
+
+  for (const result of textResults) {
+    if (result.status === 'fulfilled') {
+      const safeText = result.value.text.replace(/\0/g, '')
+      fileContents.push(`\n--- File: ${result.value.name} ---\n${safeText}\n--- End: ${result.value.name} ---`)
+    }
+    // Best effort only: failures should not block sending the prompt.
   }
 
   let nextPrompt = input.prompt

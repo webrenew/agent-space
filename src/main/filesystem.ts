@@ -49,25 +49,31 @@ async function readDirectory(dirPath: string, showHidden: boolean): Promise<File
   const resolved = path.resolve(dirPath)
   const entries = await fs.promises.readdir(resolved, { withFileTypes: true })
 
-  const results: FileEntry[] = []
-  for (const entry of entries) {
-    if (!showHidden && shouldIgnoreFilesystemEntry(entry.name, entry.isDirectory())) continue
+  const visible = entries.filter(
+    (entry) => showHidden || !shouldIgnoreFilesystemEntry(entry.name, entry.isDirectory())
+  )
 
-    const fullPath = path.join(resolved, entry.name)
-    try {
+  const settled = await Promise.allSettled(
+    visible.map(async (entry) => {
+      const fullPath = path.join(resolved, entry.name)
       const stat = await fs.promises.stat(fullPath)
-      results.push({
+      return {
         name: entry.name,
         path: fullPath,
         isDirectory: entry.isDirectory(),
         isSymlink: entry.isSymbolicLink(),
         size: stat.size,
         modified: stat.mtimeMs,
-      })
-    } catch {
-      // Skip files we can't stat (broken symlinks, permissions, etc.)
-      continue
+      } satisfies FileEntry
+    })
+  )
+
+  const results: FileEntry[] = []
+  for (const result of settled) {
+    if (result.status === 'fulfilled') {
+      results.push(result.value)
     }
+    // Skip files we can't stat (broken symlinks, permissions, etc.)
   }
 
   results.sort((a, b) => {
