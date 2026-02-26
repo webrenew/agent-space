@@ -1,20 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { useAgentStore, type ChatSessionInfo } from '../../../store/agents'
+import { createConversationId, useAgentStore, type ChatSessionInfo } from '../../../store/agents'
 import { useWorkspaceStore } from '../../../store/workspace'
 import { ChatPanel } from '../../chat/ChatPanel'
 
 let chatSessionCounter = 0
-
-function createConversationId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
-    const rand = Math.floor(Math.random() * 16)
-    const value = char === 'x' ? rand : (rand & 0x3) | 0x8
-    return value.toString(16)
-  })
-}
 
 /**
  * Workspace wrapper for ChatPanel — manages multiple chat session tabs

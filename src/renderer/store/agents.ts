@@ -104,7 +104,7 @@ function normalizePath(value: string | null | undefined): string | null {
   return normalized.length > 0 ? normalized : null
 }
 
-function createConversationId(): string {
+export function createConversationId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
@@ -117,7 +117,7 @@ function createConversationId(): string {
 
 function isConversationId(value: string | null | undefined): value is string {
   if (!value) return false
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
 function isEphemeralSmokeWorkspace(path: string): boolean {
